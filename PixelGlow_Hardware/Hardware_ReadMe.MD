@@ -6,7 +6,7 @@ This project contains production-grade, non-blocking firmware to drive WS2812B a
  - **Flash the firmware**  
  - **Use Captive Portal to set WiFi**  
  - **Use PixelGlow software to control**  
--
+
 
 
 ## Features
