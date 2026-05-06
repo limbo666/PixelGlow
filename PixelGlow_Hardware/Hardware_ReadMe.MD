@@ -2,7 +2,7 @@
 
 This project contains production-grade, non-blocking firmware to drive WS2812B ambient monitor backlights via UDP over WiFi. It is heavily optimized to maintain a strict 60fps refresh rate while keeping network listening perfectly uninterrupted.
 
-## How it works
+## How it works  
 **Flash the firmware**  
 **Use Captive Portal to set WiFi**  
 **Use PixelGlow software to control**  
