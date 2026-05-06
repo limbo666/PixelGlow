@@ -1,0 +1,58 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+	<ApplicationIcon>Images\ic_PixelGlow1.ico</ApplicationIcon>
+    <TargetFramework>net8.0-windows</TargetFramework>
+	  
+	  <Version>1.0.0.10</Version>
+	  <AssemblyVersion>1.0.0.10</AssemblyVersion>
+	  <FileVersion>1.0.0.10</FileVersion>
+	  
+    <StartupObject>Sub Main</StartupObject>
+    <UseWindowsForms>true</UseWindowsForms>
+    <MyType>WindowsForms</MyType>
+  </PropertyGroup>
+
+  <!-- Cleaned up Image Action -->
+  <ItemGroup>
+    <None Remove="Images\Base_Led.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Import Include="System.Data" />
+    <Import Include="System.Drawing" />
+    <Import Include="System.Windows.Forms" />
+  </ItemGroup>
+
+<!-- ALL Embedded Resources -->
+  <ItemGroup>
+    <EmbeddedResource Include="Images\Base_Led.png" />
+    <EmbeddedResource Include="Images\ic_PixelGlow0a.ico" />
+    <EmbeddedResource Include="Images\ic_PixelGlow0b.ico" />
+    <EmbeddedResource Include="Images\ic_PixelGlow1.ico" />
+    <EmbeddedResource Include="Images\ic_PixelGlow2.ico" />
+    <EmbeddedResource Include="Images\im_PixelGlow_Banner.png" />
+    <EmbeddedResource Include="Images\im_PixelGlow0a.png" />
+    <EmbeddedResource Include="Images\im_PixelGlow0b.png" />
+    <EmbeddedResource Include="Images\im_PixelGlow1.png" />
+    <EmbeddedResource Include="Images\im_PixelGlow2.png" />
+  </ItemGroup>
+
+  <!-- Cleaned up application settings (Removed broken Resources.resx links) -->
+  <ItemGroup>
+    <Compile Update="My Project\Application.Designer.vb">
+      <DesignTime>True</DesignTime>
+      <AutoGen>True</AutoGen>
+      <DependentUpon>Application.myapp</DependentUpon>
+    </Compile>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="My Project\Application.myapp">
+      <Generator>MyApplicationCodeGenerator</Generator>
+      <LastGenOutput>Application.Designer.vb</LastGenOutput>
+    </None>
+  </ItemGroup>
+
+</Project>
