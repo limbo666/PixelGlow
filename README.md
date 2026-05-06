@@ -8,15 +8,15 @@ PixelGlow is a lightweight Windows ambient lighting application that runs silent
 At its core, PixelGlow features a high-performance screen color detection engine that continuously samples the edges of any selected monitor and translates the dominant colors into real-time LED lighting commands. A built-in mimic preview window lets you visualize exactly what your LED strips will display before it reaches the hardware — making setup intuitive and precise.  
 
 All control stays on the Windows side. The software handles every decision:  
- - Per-segment LED strip layout — independently configure the number of active LEDs and blank (gap) LEDs for each screen edge: top, bottom, left and right  
- - Selectable color byte order — full support for RGB, GBR, BRG and other WS2812-compatible schemes to match any strip wiring  
- - Transition smoothing engine — introduces configurable delay on color changes, eliminating harsh flicker and producing cinematic, fluid light transitions  
- - Brightness and color intensity controls — fine-tune the output to match your room ambiance without touching the hardware
- - Test mode to easy identify the LEDs side
- - Selectable window division
- - Black band detection, to adapt on video displayed on different ratio  
- - Multi-monitor support — select which display drives the ambient engine on any multi-screen setup  
- - UDP-based communication — fast, low-latency command delivery to ESP devices over your local network  
+ - **Per-segment LED strip layout** : Independently configure the number of active LEDs and blank (gap) LEDs for each screen edge: top, bottom, left and right  
+ - **Selectable color byte order** : Full support for RGB, GBR, BRG and other WS2812-compatible schemes to match any strip wiring  
+ - **Transition smoothing engine** : Introduces configurable delay on color changes, eliminating harsh flicker and producing cinematic, fluid light transitions  
+ - **Brightness and color intensity controls** : Fine-tune the output to match your room ambiance without touching the hardware
+ - **Test mode**: Easy identify the LEDs side for installation
+ - **Selectable window division** : To change the detection mechanism
+ - **Black band detection** : Adapt when video displayed is in a different ratio that the screen and produces black areas  
+ - **Multi-monitor support** : Select which display drives the ambient engine on any multi-screen setup  
+ - **UDP-based communication** : Fast, low-latency command delivery to ESP devices over your local network  
 
 ### Hardware Description
 The PixelGlow ESP node is a plug-and-play Wi-Fi LED controller built on ESP32 or ESP8266, designed to require zero configuration on the LED side and minimal setup from the user.  
