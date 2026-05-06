@@ -59,14 +59,14 @@ PixelGlow operates on a decoupled architecture:
 ## Hardware Setup
 
 ### Prerequisites
-* An ESP8266 (e.g., Wemos D1 Mini, NodeMCU) or ESP32 board.
+* An ESP32 board or an ESP8266 (e.g., Wemos D1 Mini, NodeMCU).
 * A WS2812B (or compatible) addressable LED strip.
 * An appropriate 5V power supply for your LED strip.
 
 ### Installation Steps
 1.  **Flash the Firmware:** Flash the provided PixelGlow firmware to your ESP board using your preferred flashing tool (Arduino IDE, PlatformIO, or ESP Flasher).
 2.  **First Boot (Captive Portal):** * Power on the ESP.
-    * Using your phone or laptop, search for a new Wi-Fi network named `PixelGlow_Setup` (or similar, depending on firmware defaults).
+    * Using your phone or laptop, search for a new Wi-Fi network named `PixelGlow_Setup` (or `ESP32-Backlight-Setup`, or `ESP8266-Backlight-Setup` depending on firmware defaults).
     * Connect to it. A captive portal page should automatically open.
     * Select your home Wi-Fi network, enter the password, and save.
 3.  **Find the IP Address:** Once connected to your home network, check your router's DHCP client list to find the IP address assigned to the ESP node. You will need this for the Windows software.
@@ -88,6 +88,10 @@ PixelGlow operates on a decoupled architecture:
 ## Configuration Guide
 
 The Settings menu is divided into intuitive tabs:
+
+### General Settings
+* **Control Hardware:** Check to send data over the network. Uncheck to pause physical lighting while keeping the software running.
+* **Start in Tray / Start with Windows:** Configure startup behavior for seamless daily use.
 
 ### Display
 * **Target Display:** Choose which monitor the engine analyzes.
@@ -111,18 +115,14 @@ The Settings menu is divided into intuitive tabs:
 * **Temporal Smoothing:** Controls the fade speed between colors. Higher values mean faster, sharper transitions; lower values mean slow, cinematic fades.
 * **Auto-Crop Black Bars:** Enable to ignore letterboxing in movies. You can select standard or aggressive sensitivity.
 
-### General Settings
-* **Control Hardware:** Check to send data over the network. Uncheck to pause physical lighting while keeping the software running.
-* **Start in Tray / Start with Windows:** Configure startup behavior for seamless daily use.
 
 ---
 
 ## Credits
 
-**Creator:** Nikos Georgousis  
-**Company:** Hand Water Pump  
+Nikos Georgousis  
+Hand Water Pump  
 
-For updates, project history, and source code, visit the [GitHub Project Page](https://github.com/limbo666/PixelGlow) or the creator's website at http://www.georgousis.info.
 
 ---
 
