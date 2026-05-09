@@ -1,6 +1,6 @@
 # PixelGlow
 
-![Banner](https://github.com/limbo666/PixelGlow/blob/main/PixelGlow_Images_Icons/Im_PixelGlow_Banner.png?raw=true)
+![Banner](https://github.com/limbo666/PixelGlow/blob/main/PixelGlow_Images_Icons/Base_Led.png?raw=true)
 
 A high-performance, lightweight Windows ambient lighting system that harmonizes your digital environment with physical light.
 
