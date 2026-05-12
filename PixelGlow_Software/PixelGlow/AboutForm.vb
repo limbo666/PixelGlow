@@ -54,7 +54,7 @@ Public Class AboutForm
         Dim lblTitle As New Label() With {.Text = "PixelGlow", .AutoSize = True, .Font = New Font("Segoe UI Semibold", 28), .ForeColor = Color.FromArgb(0, 120, 215)}
         Dim lblVersion As New Label() With {.Text = $"Version {Application.ProductVersion}", .AutoSize = True, .Location = New Point(0, 60), .ForeColor = Color.Gray}
 
-        Dim descText As String = "PixelGlow is a lightweight Windows ambient lighting application that runs silently from the system tray, turning your monitor setup into an immersive RGB backlight experience — no gaming ecosystem required, no subscriptions, no bloat." & vbCrLf & vbCrLf &
+        Dim descText As String = "PixelGlow is a lightweight Windows ambient lighting application that runs silently from the system tray, turning your monitor setup into an immersive RGB backlight experience. No gaming ecosystem required, no subscriptions, no bloat." & vbCrLf & vbCrLf &
                                  "At its core, PixelGlow features a high-performance screen color detection engine that continuously samples the edges of any selected monitor and translates the dominant colors into real-time LED lighting commands."
 
         Dim lblDesc As New Label() With {

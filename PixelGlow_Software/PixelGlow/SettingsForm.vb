@@ -11,13 +11,16 @@ Public Class SettingsForm
     Private _numInterval, _numSmooth, _numSat, _numBright As NumericUpDown
     Private _numGapStart, _numGapTop, _numGapRight, _numGapBottom, _numGapLeft As NumericUpDown
     Private _cmbMonitor, _cmbSensitivity, _cmbColorOrder, _cmbGridSize As ComboBox
+    Private _cmbStartEdge, _cmbDirection As ComboBox
+    Private _cmbProtocol As ComboBox
     Private _chkBlackBar, _chkTestMode, _chkGrid, _chkLogging, _chkControlHw As CheckBox
+    Private _chkDiagSegments, _chkDiagGaps, _chkDiagSweep, _chkDiagBullet As CheckBox
     Private _chkStartInTray, _chkStartWithWindows As CheckBox
     Private _lblStatus As Label
 
     ' Virtual Tab Infrastructure
-    Private _btnDisp, _btnNet, _btnLeds, _btnEng, _btnGen As Button
-    Private _tabDisp, _tabNet, _tabLeds, _tabEng, _tabGen As Panel
+    Private _btnDisp, _btnNet, _btnLeds, _btnEng, _btnGen, _btnDiag As Button
+    Private _tabDisp, _tabNet, _tabLeds, _tabEng, _tabGen, _tabDiag As Panel
 
     ' NEW: Real-time update event
     Public Event SettingsApplied As EventHandler
@@ -83,14 +86,15 @@ Public Class SettingsForm
         sidebar.SendToBack()
         contentArea.BringToFront()
 
-        _tabDisp = CreateTabPanel() : _tabNet = CreateTabPanel() : _tabLeds = CreateTabPanel() : _tabEng = CreateTabPanel() : _tabGen = CreateTabPanel()
-        contentArea.Controls.AddRange({_tabDisp, _tabNet, _tabLeds, _tabEng, _tabGen})
+        _tabDisp = CreateTabPanel() : _tabNet = CreateTabPanel() : _tabLeds = CreateTabPanel() : _tabEng = CreateTabPanel() : _tabGen = CreateTabPanel() : _tabDiag = CreateTabPanel()
+        contentArea.Controls.AddRange({_tabDisp, _tabNet, _tabLeds, _tabEng, _tabGen, _tabDiag})
 
         _btnGen = CreateSidebarButton("General", sidebar)
         _btnDisp = CreateSidebarButton("Display", sidebar)
         _btnNet = CreateSidebarButton("Network", sidebar)
         _btnLeds = CreateSidebarButton("Hardware Layout", sidebar)
         _btnEng = CreateSidebarButton("Engine", sidebar)
+        _btnDiag = CreateSidebarButton("Diagnostics", sidebar)
 
 
 
@@ -114,44 +118,146 @@ Public Class SettingsForm
         ' === TAB 2: Network ===
         AddTabHeader("Network", _tabNet)
         Dim tblNet = CreateTable(_tabNet)
-        _txtIP = AddTextBoxRow("Target IP Address", SettingsManager.Current.TargetIP, "ESP module address. Use '255.255.255.255' to broadcast.", tblNet)
-        _numPort = AddNumericRow("UDP Port", 1, 65535, SettingsManager.Current.TargetPort, "Hardware port. Default is 45045.", tblNet)
+
+        _cmbProtocol = AddComboBoxRow("Hardware Protocol", "Select the type of receiver.", tblNet)
+        _cmbProtocol.Items.AddRange(New String() {"PixelGlow Native", "WLED (DRGB)"})
+        _cmbProtocol.SelectedItem = SettingsManager.Current.HardwareProtocol
+        If _cmbProtocol.SelectedIndex = -1 Then _cmbProtocol.SelectedIndex = 0
+        ' Load initial UI based on current protocol
+        Dim isWled As Boolean = (SettingsManager.Current.HardwareProtocol = "WLED (DRGB)")
+        Dim initIP As String = If(isWled, SettingsManager.Current.WledIP, SettingsManager.Current.TargetIP)
+        Dim initPort As Integer = If(isWled, SettingsManager.Current.WledPort, SettingsManager.Current.TargetPort)
+
+        _txtIP = AddTextBoxRow("Target IP Address", initIP, "", tblNet)
+        _numPort = AddNumericRow("UDP Port", 1, 65535, initPort, "", tblNet)
+
+        ' Dynamically grab the description labels from the table layout
+        Dim lblIpDesc As Label = DirectCast(tblNet.GetControlFromPosition(1, tblNet.GetRow(_txtIP) + 1), Label)
+        Dim lblPortDesc As Label = DirectCast(tblNet.GetControlFromPosition(1, tblNet.GetRow(_numPort) + 1), Label)
+
+        ' Inline helper to swap the text dynamically
+        Dim updateDescriptions = Sub(wledMode As Boolean)
+                                     If wledMode Then
+                                         lblIpDesc.Text = "IP Address of your WLED controller. (Static IP recommended in router)."
+                                         lblPortDesc.Text = "Hardware port. WLED DRGB stream defaults to 21324."
+                                     Else
+                                         lblIpDesc.Text = "ESP module address. Use '255.255.255.255' to broadcast to network."
+                                         lblPortDesc.Text = "Hardware port. Native firmware defaults to 45045."
+                                     End If
+                                 End Sub
+
+        ' Set the text correctly on initial load
+        updateDescriptions(isWled)
+
+        ' Keep track of the dropdown state to save before swapping
+        Dim lastSelectedProtocol As String = _cmbProtocol.SelectedItem.ToString()
+
+        AddHandler _cmbProtocol.SelectedIndexChanged, Sub()
+                                                          ' 1. Save the currently typed values to memory before switching
+                                                          If lastSelectedProtocol = "WLED (DRGB)" Then
+                                                              SettingsManager.Current.WledIP = _txtIP.Text
+                                                              SettingsManager.Current.WledPort = CInt(_numPort.Value)
+                                                          Else
+                                                              SettingsManager.Current.TargetIP = _txtIP.Text
+                                                              SettingsManager.Current.TargetPort = CInt(_numPort.Value)
+                                                          End If
+
+                                                          ' 2. Update tracker
+                                                          lastSelectedProtocol = _cmbProtocol.SelectedItem.ToString()
+                                                          Dim isNowWled As Boolean = (lastSelectedProtocol = "WLED (DRGB)")
+
+                                                          ' 3. Swap the UI text and values to the newly selected protocol
+                                                          updateDescriptions(isNowWled)
+
+                                                          If isNowWled Then
+                                                              _txtIP.Text = SettingsManager.Current.WledIP
+                                                              _numPort.Value = SettingsManager.Current.WledPort
+                                                          Else
+                                                              _txtIP.Text = SettingsManager.Current.TargetIP
+                                                              _numPort.Value = SettingsManager.Current.TargetPort
+                                                          End If
+                                                      End Sub
 
         ' === TAB 3: Hardware Layout ===
         AddTabHeader("Physical LED Layout", _tabLeds)
         Dim tblLeds = CreateTable(_tabLeds)
 
         ' Group: Main Config
-        AddSectionHeader("Strip Configuration", tblLeds)
+        AddSectionHeader("Strip Configuration (Front-Facing Perspective)", tblLeds)
+
+        _cmbStartEdge = AddComboBoxRow("Starting Edge", "Where does the strip start? (Imagine looking at the FRONT of your monitor).", tblLeds)
+        _cmbStartEdge.Items.AddRange(New String() {"Top", "Right", "Bottom", "Left"})
+        _cmbStartEdge.SelectedItem = SettingsManager.Current.StartEdge
+        If _cmbStartEdge.SelectedIndex = -1 Then _cmbStartEdge.SelectedIndex = 0
+
+        _cmbDirection = AddComboBoxRow("Routing Direction", "Direction from the FRONT of the screen. (⚠️ If you are looking at the BACK of the monitor, select the opposite!)", tblLeds)
+        _cmbDirection.Items.AddRange(New String() {"Clockwise", "Counter-Clockwise"})
+        _cmbDirection.SelectedItem = SettingsManager.Current.Direction
+        If _cmbDirection.SelectedIndex = -1 Then _cmbDirection.SelectedIndex = 0
+
         _cmbColorOrder = AddComboBoxRow("Color Sequence", "Matches software to your strip's physical wiring.", tblLeds)
         _cmbColorOrder.Items.AddRange(New String() {"RGB", "GRB", "BRG", "BGR", "RBG", "GBR"})
         _cmbColorOrder.SelectedItem = SettingsManager.Current.ColorSequence
         If _cmbColorOrder.SelectedIndex = -1 Then _cmbColorOrder.SelectedIndex = 0
+
         _numGapStart = AddNumericRow("Start Offset (Blanks)", 0, 100, SettingsManager.Current.BlankStart, "Hidden LEDs between the controller box and the actual screen start.", tblLeds)
 
         ' Group: Top
         AddSectionHeader("Top Edge", tblLeds)
         _numTop = AddNumericRow("Active LEDs", 0, 1000, SettingsManager.Current.TopLeds, "LEDs tracking the top screen edge.", tblLeds)
-        _numGapTop = AddNumericRow("Corner Gap (Blanks)", 0, 50, SettingsManager.Current.BlankAfterTop, "Dead LEDs bending around the top-to-right corner.", tblLeds)
+        _numGapTop = AddNumericRow("Corner Gap (Blanks)", 0, 50, SettingsManager.Current.BlankAfterTop, "Dead LEDs in the corner following the Top edge.", tblLeds)
 
         ' Group: Right
         AddSectionHeader("Right Edge", tblLeds)
         _numRight = AddNumericRow("Active LEDs", 0, 1000, SettingsManager.Current.RightLeds, "LEDs tracking the right screen edge.", tblLeds)
-        _numGapRight = AddNumericRow("Corner Gap (Blanks)", 0, 50, SettingsManager.Current.BlankAfterRight, "Dead LEDs bending around the right-to-bottom corner.", tblLeds)
+        _numGapRight = AddNumericRow("Corner Gap (Blanks)", 0, 50, SettingsManager.Current.BlankAfterRight, "Dead LEDs in the corner following the Right edge.", tblLeds)
 
         ' Group: Bottom
         AddSectionHeader("Bottom Edge", tblLeds)
         _numBottom = AddNumericRow("Active LEDs", 0, 1000, SettingsManager.Current.BottomLeds, "LEDs tracking the bottom screen edge.", tblLeds)
-        _numGapBottom = AddNumericRow("Corner Gap (Blanks)", 0, 50, SettingsManager.Current.BlankAfterBottom, "Dead LEDs bending around the bottom-to-left corner.", tblLeds)
+        _numGapBottom = AddNumericRow("Corner Gap (Blanks)", 0, 50, SettingsManager.Current.BlankAfterBottom, "Dead LEDs in the corner following the Bottom edge.", tblLeds)
 
         ' Group: Left
         AddSectionHeader("Left Edge", tblLeds)
         _numLeft = AddNumericRow("Active LEDs", 0, 1000, SettingsManager.Current.LeftLeds, "LEDs tracking the left screen edge.", tblLeds)
-        _numGapLeft = AddNumericRow("Corner Gap (Blanks)", 0, 50, SettingsManager.Current.BlankAfterLeft, "Dead LEDs extending past the left edge.", tblLeds)
+        _numGapLeft = AddNumericRow("Corner Gap (Blanks)", 0, 50, SettingsManager.Current.BlankAfterLeft, "Dead LEDs in the corner following the Left edge.", tblLeds)
 
-        ' Group: Diagnostics
-        AddSectionHeader("Diagnostics", tblLeds)
-        _chkTestMode = AddCheckBoxRow("Alignment Test Mode", SettingsManager.Current.TestMode, "Forces LEDs to Red (Top), Green (Bottom), Blue (Left), Purple (Right).", tblLeds)
+        ' === NEW TAB: Diagnostics ===
+        AddTabHeader("System Diagnostics", _tabDiag)
+        Dim tblDiag = CreateTable(_tabDiag)
+
+        AddSectionHeader("Hardware Testing", tblDiag)
+        _chkTestMode = AddCheckBoxRow("Alignment Test Mode", SettingsManager.Current.TestMode, "Forces LEDs to Red (Top), Green (Bottom), Blue (Left), Purple (Right).", tblDiag)
+        _chkDiagSegments = AddCheckBoxRow("Indicate Segments", SettingsManager.Current.DiagSegments, "Sends a purple breathing beacon to the start and end LEDs (2 each) of every screen edge.", tblDiag)
+        _chkDiagGaps = AddCheckBoxRow("Indicate Gaps", SettingsManager.Current.DiagGaps, "Lights up all hidden Start Offset and Corner Gap LEDs in steady Red.", tblDiag)
+        _chkDiagSweep = AddCheckBoxRow("Sweep Effect", SettingsManager.Current.DiagSweep, "Sweeps Red, Green, and Blue (3 LEDs each) from start to end continuously.", tblDiag)
+        _chkDiagBullet = AddCheckBoxRow("Bullet Effect", SettingsManager.Current.DiagBullet, "Rapid white comet effect with a fading tail shooting from start to end.", tblDiag)
+
+        ' --- Mutually Exclusive Logic (Only one test mode at a time) ---
+        Dim diagBoxes() As CheckBox = {_chkTestMode, _chkDiagSegments, _chkDiagGaps, _chkDiagSweep, _chkDiagBullet}
+        For Each cb In diagBoxes
+            ' We use 'Click' instead of 'CheckedChanged' so our code unchecking them doesn't trigger an infinite loop
+            AddHandler cb.Click, Sub(sender As Object, e As EventArgs)
+                                     Dim clickedBox = DirectCast(sender, CheckBox)
+                                     If clickedBox.Checked Then
+                                         For Each otherBox In diagBoxes
+                                             If otherBox IsNot clickedBox Then otherBox.Checked = False
+                                         Next
+                                     End If
+                                 End Sub
+        Next
+
+        ' Add the Pro-Tip label manually to span the table
+        Dim lblNote As New Label() With {
+            .Text = "💡 Pro Tip: On the Mimic Window, hold CTRL and Double-Click anywhere to instantly cycle through solid Red, Green, Blue, and White diagnostic colors. A standard Double-Click returns to normal operation.",
+            .Dock = DockStyle.Fill, .AutoSize = True, .ForeColor = Color.DimGray,
+            .Font = New Font("Segoe UI", 9.5F, FontStyle.Italic), .Padding = New Padding(10, 25, 10, 0)
+        }
+        Dim rDiag = tblDiag.RowCount
+        tblDiag.RowCount += 1
+        tblDiag.RowStyles.Add(New RowStyle(SizeType.AutoSize))
+        tblDiag.Controls.Add(lblNote, 0, rDiag)
+        tblDiag.SetColumnSpan(lblNote, 2)
 
         ' === TAB 4: Engine ===
         AddTabHeader("Processing Parameters", _tabEng)
@@ -181,6 +287,26 @@ Public Class SettingsForm
         _chkStartWithWindows = AddCheckBoxRow("Start with Windows", SettingsManager.Current.StartWithWindows, "Automatically launches PixelGlow when you log into your computer.", tblGen)
         _chkLogging = AddCheckBoxRow("Enable Logging", SettingsManager.Current.LoggingEnabled, "Writes background diagnostic information to a log file for troubleshooting.", tblGen)
 
+
+        ' --- Cross-Tab UI Sync for WLED ---
+        ' Grab the description label for the Color Sequence dropdown from the Layout table
+        Dim lblColorDesc As Label = DirectCast(tblLeds.GetControlFromPosition(1, tblLeds.GetRow(_cmbColorOrder) + 1), Label)
+
+        Dim syncCrossTabUi = Sub()
+                                 Dim isNowWledMode As Boolean = (_cmbProtocol.SelectedItem.ToString() = "WLED (DRGB)")
+                                 _cmbColorOrder.Enabled = Not isNowWledMode
+
+                                 If isNowWledMode Then
+                                     lblColorDesc.Text = "Disabled. Configure your physical color sequence (GRB, RGB, etc.) inside the WLED web interface."
+                                 Else
+                                     lblColorDesc.Text = "Matches software to your strip's physical wiring."
+                                 End If
+                             End Sub
+
+        ' Attach the listener and run it once to set the initial state
+        AddHandler _cmbProtocol.SelectedIndexChanged, Sub() syncCrossTabUi()
+        syncCrossTabUi()
+
         ' --- Restore the last selected tab ---
         Select Case SettingsManager.Current.LastSettingsTab
             Case 0 : SidebarClick(_btnGen, EventArgs.Empty)
@@ -188,6 +314,7 @@ Public Class SettingsForm
             Case 2 : SidebarClick(_btnNet, EventArgs.Empty)
             Case 3 : SidebarClick(_btnLeds, EventArgs.Empty)
             Case 4 : SidebarClick(_btnEng, EventArgs.Empty)
+            Case 5 : SidebarClick(_btnDiag, EventArgs.Empty)
             Case Else : SidebarClick(_btnGen, EventArgs.Empty)
         End Select
     End Sub
@@ -233,9 +360,9 @@ Public Class SettingsForm
     End Function
 
     Private Sub SidebarClick(sender As Object, e As EventArgs)
-        _tabDisp.Visible = False : _tabNet.Visible = False : _tabLeds.Visible = False : _tabEng.Visible = False : _tabGen.Visible = False
+        _tabDisp.Visible = False : _tabNet.Visible = False : _tabLeds.Visible = False : _tabEng.Visible = False : _tabGen.Visible = False : _tabDiag.Visible = False
         _btnDisp.BackColor = Color.FromArgb(30, 30, 35) : _btnNet.BackColor = Color.FromArgb(30, 30, 35)
-        _btnLeds.BackColor = Color.FromArgb(30, 30, 35) : _btnEng.BackColor = Color.FromArgb(30, 30, 35) : _btnGen.BackColor = Color.FromArgb(30, 30, 35)
+        _btnLeds.BackColor = Color.FromArgb(30, 30, 35) : _btnEng.BackColor = Color.FromArgb(30, 30, 35) : _btnGen.BackColor = Color.FromArgb(30, 30, 35) : _btnDiag.BackColor = Color.FromArgb(30, 30, 35)
 
         Dim clicked = DirectCast(sender, Button)
         clicked.BackColor = Color.FromArgb(0, 120, 215)
@@ -246,6 +373,7 @@ Public Class SettingsForm
         If clicked Is _btnNet Then _tabNet.Visible = True : _tabNet.BringToFront() : SettingsManager.Current.LastSettingsTab = 2
         If clicked Is _btnLeds Then _tabLeds.Visible = True : _tabLeds.BringToFront() : SettingsManager.Current.LastSettingsTab = 3
         If clicked Is _btnEng Then _tabEng.Visible = True : _tabEng.BringToFront() : SettingsManager.Current.LastSettingsTab = 4
+        If clicked Is _btnDiag Then _tabDiag.Visible = True : _tabDiag.BringToFront() : SettingsManager.Current.LastSettingsTab = 5
     End Sub
 
     Private Sub AddTabHeader(title As String, parent As Control)
@@ -347,8 +475,14 @@ Public Class SettingsForm
                 Case 3 : .GridCols = 4 : .GridRows = 3
             End Select
 
-            .TargetIP = _txtIP.Text
-            .TargetPort = CInt(_numPort.Value)
+            .HardwareProtocol = _cmbProtocol.SelectedItem.ToString()
+            If .HardwareProtocol = "WLED (DRGB)" Then
+                .WledIP = _txtIP.Text
+                .WledPort = CInt(_numPort.Value)
+            Else
+                .TargetIP = _txtIP.Text
+                .TargetPort = CInt(_numPort.Value)
+            End If
 
             .MaxBrightness = CInt(_numBright.Value)
             .SaturationBoost = CInt(_numSat.Value)
@@ -359,6 +493,8 @@ Public Class SettingsForm
             .DetectBlackBars = _chkBlackBar.Checked
             .BlackBarThreshold = If(_cmbSensitivity.SelectedIndex = 0, 40, 120)
 
+            .StartEdge = _cmbStartEdge.SelectedItem.ToString()
+            .Direction = _cmbDirection.SelectedItem.ToString()
             .ColorSequence = _cmbColorOrder.SelectedItem.ToString()
 
             .TopLeds = CInt(_numTop.Value)
@@ -371,6 +507,12 @@ Public Class SettingsForm
             .BlankAfterRight = CInt(_numGapRight.Value)
             .BlankAfterBottom = CInt(_numGapBottom.Value)
             .BlankAfterLeft = CInt(_numGapLeft.Value)
+
+            .TestMode = _chkTestMode.Checked
+            .DiagSegments = _chkDiagSegments.Checked
+            .DiagGaps = _chkDiagGaps.Checked
+            .DiagSweep = _chkDiagSweep.Checked
+            .DiagBullet = _chkDiagBullet.Checked
 
             .ShowDetectionGrid = _chkGrid.Checked
             .ControlHardware = _chkControlHw.Checked
@@ -397,11 +539,14 @@ Public Class SettingsForm
     Protected Overrides Sub OnFormClosing(e As FormClosingEventArgs)
         RegistryHelper.SaveWindowBounds(Me)
 
-        ' FAILSAFE: Only revert TestMode if the user closed the window WITHOUT clicking OK or Apply.
-        ' We do NOT touch ShowDetectionGrid here; that is now a permanent setting.
+        ' FAILSAFE: Revert all hardware testing if the user closed the window WITHOUT clicking OK or Apply.
         If Me.DialogResult <> DialogResult.OK Then
-            If SettingsManager.Current.TestMode Then
+            If SettingsManager.Current.TestMode OrElse SettingsManager.Current.DiagSegments OrElse SettingsManager.Current.DiagGaps OrElse SettingsManager.Current.DiagSweep OrElse SettingsManager.Current.DiagBullet Then
                 SettingsManager.Current.TestMode = False
+                SettingsManager.Current.DiagSegments = False
+                SettingsManager.Current.DiagGaps = False
+                SettingsManager.Current.DiagSweep = False
+                SettingsManager.Current.DiagBullet = False
                 SettingsManager.Save()
                 RaiseEvent SettingsApplied(Me, EventArgs.Empty)
             End If

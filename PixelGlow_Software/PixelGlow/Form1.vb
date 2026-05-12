@@ -2,7 +2,10 @@
 Imports System.Windows.Forms
 
 Public Class Form1
+    Private _isExiting As Boolean = False
+    Private _mimicColorMode As Integer = 0 ' 0=Normal, 1=Red, 2=Green, 3=Blue, 4=White
     Private _engine As AmbientEngine
+    Private _mnuControlHw As ToolStripMenuItem ' Tracks the tray menu checkmark
     Private _uiTimer As Timer
     Private _trayIcon As NotifyIcon
     Private _settingsForm As SettingsForm
@@ -17,6 +20,20 @@ Public Class Form1
         Me.DoubleBuffered = True
         Me.Text = "PixelGlow Mimic Form"
         Me.BackColor = Color.Black
+
+        ' --- Form Context Menu ---
+        Dim mimicMenu As New ContextMenuStrip()
+        mimicMenu.Items.Add("Settings", Nothing, Sub() ShowSettings())
+        mimicMenu.Items.Add("About", Nothing, Sub()
+                                                  Dim frm As New AboutForm()
+                                                  frm.ShowDialog()
+                                              End Sub)
+        mimicMenu.Items.Add("-")
+        mimicMenu.Items.Add("Exit", Nothing, Sub()
+                                                 _isExiting = True
+                                                 Me.Close()
+                                             End Sub)
+        Me.ContextMenuStrip = mimicMenu
 
         InitTray()
 
@@ -40,6 +57,24 @@ Public Class Form1
 
         trayMenu.Items.Add("Show/Hide Mimic", Nothing, Sub() ToggleMimicVisibility())
         trayMenu.Items.Add("Settings", Nothing, Sub() ShowSettings())
+        trayMenu.Items.Add("-")
+
+        ' --- HARDWARE TOGGLE ---
+        _mnuControlHw = New ToolStripMenuItem("Control Hardware") With {
+            .CheckOnClick = True,
+            .Checked = SettingsManager.Current.ControlHardware
+        }
+        AddHandler _mnuControlHw.CheckedChanged, Sub(sender As Object, e As EventArgs)
+                                                     ' Prevent double-firing if updated via the Settings menu
+                                                     If SettingsManager.Current.ControlHardware <> _mnuControlHw.Checked Then
+                                                         SettingsManager.Current.ControlHardware = _mnuControlHw.Checked
+                                                         SettingsManager.Save()
+                                                         _engine?.ReloadSettings()
+                                                         UpdateTrayIcon()
+                                                     End If
+                                                 End Sub
+        trayMenu.Items.Add(_mnuControlHw)
+        trayMenu.Items.Add("-")
 
         ' --- SAFE ABOUT BUTTON ---
         Dim aboutItem As New ToolStripMenuItem("About")
@@ -51,7 +86,10 @@ Public Class Form1
         ' -------------------------
 
         trayMenu.Items.Add("-")
-        trayMenu.Items.Add("Exit", Nothing, Sub() Me.Close())
+        trayMenu.Items.Add("Exit", Nothing, Sub()
+                                                _isExiting = True
+                                                Me.Close()
+                                            End Sub)
 
         Me.Icon = ResourceLoader.GetIcon("ic_PixelGlow1.ico") ' Primary Form Icon
 
@@ -93,6 +131,11 @@ Public Class Form1
 
         ' Listen for the Apply/OK buttons to refresh the UI
         AddHandler _settingsForm.SettingsApplied, Sub(sender, ev)
+                                                      ' Sync the tray menu checkmark to match the saved setting
+                                                      If _mnuControlHw IsNot Nothing Then
+                                                          _mnuControlHw.Checked = SettingsManager.Current.ControlHardware
+                                                      End If
+
                                                       _engine.ReloadSettings()
                                                       UpdateTrayIcon() ' Sync the tray icon
                                                       Me.Invalidate()
@@ -101,8 +144,37 @@ Public Class Form1
         _settingsForm.Show()
     End Sub
 
+    Protected Overrides Sub OnMouseDoubleClick(e As MouseEventArgs)
+        MyBase.OnMouseDoubleClick(e)
+
+        ' Check if CTRL key is held down
+        If ModifierKeys.HasFlag(Keys.Control) Then
+            _mimicColorMode += 1
+            If _mimicColorMode > 4 Then _mimicColorMode = 0
+        Else
+            ' Simple double click exits the color mode immediately
+            _mimicColorMode = 0
+        End If
+
+        Me.Invalidate() ' Force immediate redraw
+    End Sub
+
     Protected Overrides Sub OnPaint(e As PaintEventArgs)
         MyBase.OnPaint(e)
+
+        ' --- OVERRIDE: Mimic Color Cycle Mode ---
+        If _mimicColorMode > 0 Then
+            Dim c As Color
+            Select Case _mimicColorMode
+                Case 1 : c = Color.Red
+                Case 2 : c = Color.Green
+                Case 3 : c = Color.Blue
+                Case 4 : c = Color.White
+            End Select
+            e.Graphics.Clear(c)
+            Return
+        End If
+
         Dim zones = _engine?.CurrentZones
         If zones Is Nothing Then Exit Sub
 
@@ -126,8 +198,16 @@ Public Class Form1
     End Sub
 
     Protected Overrides Sub OnFormClosing(e As FormClosingEventArgs)
+        ' If the user just clicked the X, cancel the close and hide the form instead
+        If Not _isExiting Then
+            e.Cancel = True
+            Me.Hide()
+            Return
+        End If
+
+        ' Otherwise, proceed with full shutdown
         RegistryHelper.SaveWindowBounds(Me)
-        _engine?.Stop()
+        _engine?.ReleaseAndStop()
         _trayIcon?.Dispose()
         If _settingsForm IsNot Nothing AndAlso Not _settingsForm.IsDisposed Then _settingsForm.Close()
         MyBase.OnFormClosing(e)

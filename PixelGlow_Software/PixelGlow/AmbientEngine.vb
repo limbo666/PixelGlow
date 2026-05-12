@@ -28,14 +28,18 @@ Public Class AmbientEngine
 
     Public Sub New()
         SettingsManager.Load()
-        Broadcaster = New Broadcaster(SettingsManager.Current.TargetIP, SettingsManager.Current.TargetPort)
+        Dim actIP As String = If(SettingsManager.Current.HardwareProtocol = "WLED (DRGB)", SettingsManager.Current.WledIP, SettingsManager.Current.TargetIP)
+        Dim actPort As Integer = If(SettingsManager.Current.HardwareProtocol = "WLED (DRGB)", SettingsManager.Current.WledPort, SettingsManager.Current.TargetPort)
+        Broadcaster = New Broadcaster(actIP, actPort)
         ApplyConfigToBroadcaster()
         UpdateGrid()
     End Sub
 
     Public Sub ReloadSettings()
         SyncLock _engineLock
-            Broadcaster = New Broadcaster(SettingsManager.Current.TargetIP, SettingsManager.Current.TargetPort)
+            Dim actIP As String = If(SettingsManager.Current.HardwareProtocol = "WLED (DRGB)", SettingsManager.Current.WledIP, SettingsManager.Current.TargetIP)
+            Dim actPort As Integer = If(SettingsManager.Current.HardwareProtocol = "WLED (DRGB)", SettingsManager.Current.WledPort, SettingsManager.Current.TargetPort)
+            Broadcaster = New Broadcaster(actIP, actPort)
             ApplyConfigToBroadcaster()
             UpdateGrid()
             _activeBounds = Rectangle.Empty
@@ -303,4 +307,12 @@ Public Class AmbientEngine
 
         Return Color.FromArgb(255, CInt(r), CInt(g), CInt(b))
     End Function
+
+
+    Public Sub ReleaseAndStop()
+        _running = False
+        If Broadcaster IsNot Nothing Then
+            Broadcaster.ReleaseHardware()
+        End If
+    End Sub
 End Class

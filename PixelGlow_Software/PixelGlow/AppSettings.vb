@@ -1,14 +1,22 @@
 ﻿' AppSettings.vb
 Public Class AppSettings
     ' Network Settings
+    Public Property HardwareProtocol As String = "PixelGlow Native"
     Public Property TargetIP As String = "255.255.255.255"
     Public Property TargetPort As Integer = 45045
+    Public Property WledIP As String = "255.255.255.255"
+    Public Property WledPort As Integer = 21324
 
     ' Performance & Display Settings
     Public Property UpdateIntervalMs As Integer = 30
     Public Property LoggingEnabled As Boolean = False
     Public Property StartInTray As Boolean = False
     Public Property StartWithWindows As Boolean = False
+
+
+    Public Property StartEdge As String = "Top"
+    Public Property Direction As String = "Clockwise"
+
 
     Public Property TargetMonitorIndex As Integer = 0
 
@@ -21,6 +29,10 @@ Public Class AppSettings
     Public Property BlackBarThreshold As Integer = 120 ' NEW: 40 = Standard, 120 = Aggressive
 
     Public Property TestMode As Boolean = False
+    Public Property DiagSegments As Boolean = False
+    Public Property DiagGaps As Boolean = False
+    Public Property DiagSweep As Boolean = False
+    Public Property DiagBullet As Boolean = False
     Public Property ShowDetectionGrid As Boolean = False
     Public Property ControlHardware As Boolean = True
     Public Property LastSettingsTab As Integer = 0

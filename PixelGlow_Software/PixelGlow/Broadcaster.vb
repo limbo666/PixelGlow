@@ -14,57 +14,164 @@ Public Class Broadcaster
     End Sub
 
     Public Sub SendData(zones(,) As Color)
+        _animTick += 1
         Dim leds As New List(Of Color)
         Dim gridW As Integer = zones.GetLength(0)
         Dim gridH As Integer = zones.GetLength(1)
 
-        ' Mapping Sequence with Physical Corner Gaps
+        ' Calculate total physical LEDs for the linear animations
+        Dim totalLeds As Integer = SettingsManager.Current.BlankStart + Config.TopCount + SettingsManager.Current.BlankAfterTop + Config.RightCount + SettingsManager.Current.BlankAfterRight + Config.BottomCount + SettingsManager.Current.BlankAfterBottom + Config.LeftCount + SettingsManager.Current.BlankAfterLeft
+
+        ' --- LINEAR ANIMATIONS (Bypasses Layout Math) ---
+        If SettingsManager.Current.DiagSweep OrElse SettingsManager.Current.DiagBullet Then
+            For i As Integer = 0 To totalLeds - 1 : leds.Add(Color.Black) : Next
+            If SettingsManager.Current.DiagSweep Then
+                ' Sweep: RRRGGGBBB moving linearly (Slower)
+                Dim head As Integer = CInt((_animTick * 0.7) Mod (totalLeds + 10))
+                For i As Integer = 0 To 8
+                    Dim idx As Integer = head - i
+                    If idx >= 0 AndAlso idx < totalLeds Then
+                        If i < 3 Then
+                            leds(idx) = Color.Red
+                        ElseIf i < 6 Then
+                            leds(idx) = Color.Green
+                        Else
+                            leds(idx) = Color.Blue
+                        End If
+                    End If
+                Next
+            ElseIf SettingsManager.Current.DiagBullet Then
+                ' Bullet: Rapid white comet (Faster, short tail)
+                Dim head As Integer = CInt((_animTick * 8) Mod (totalLeds + 5))
+            For i As Integer = 0 To 3 ' Only 4 LEDs total
+                Dim idx As Integer = head - i
+                If idx >= 0 AndAlso idx < totalLeds Then
+                    Dim intensity As Integer = Math.Max(0, 255 - (i * 65)) ' Drops fast: 255, 190, 125, 60
+                    leds(idx) = Color.FromArgb(intensity, intensity, intensity)
+                End If
+            Next
+        End If
+
+        GoTo BuildPacket
+        End If
+
+        ' --- DYNAMIC ROUTING SEQUENCE ---
+        Dim cw As Boolean = (SettingsManager.Current.Direction = "Clockwise")
+        Dim startIdx As Integer = 0
+
+        Select Case SettingsManager.Current.StartEdge
+            Case "Right" : startIdx = 1
+            Case "Bottom" : startIdx = 2
+            Case "Left" : startIdx = 3
+            Case Else : startIdx = 0 ' Top
+        End Select
+
+        Dim order(3) As Integer
+        For i As Integer = 0 To 3
+            If cw Then
+                order(i) = (startIdx + i) Mod 4
+            Else
+                order(i) = (startIdx - i + 4) Mod 4
+            End If
+        Next
+
+        ' Breathing Math for Segments (Generates a sine wave pulse between 0 and 255)
+        Dim breathVal As Integer = CInt((Math.Sin(_animTick * 0.15) * 127) + 128)
+        Dim purpleBreath As Color = Color.FromArgb(breathVal, 0, breathVal)
+
         AddBlankLeds(leds, SettingsManager.Current.BlankStart)
 
-        MapSide(leds, zones, Config.TopCount, True, 0, gridW)
-        AddBlankLeds(leds, SettingsManager.Current.BlankAfterTop)
+        For Each sideIdx In order
+            Select Case sideIdx
+                Case 0 ' Top
+                    If SettingsManager.Current.TestMode Then
+                        For i As Integer = 1 To Config.TopCount : leds.Add(Color.Red) : Next
+                    ElseIf SettingsManager.Current.DiagSegments Then
+                        For i As Integer = 1 To Config.TopCount : leds.Add(If(i = 1 Or i = Config.TopCount, purpleBreath, Color.Black)) : Next
+                    ElseIf SettingsManager.Current.DiagGaps Then
+                        For i As Integer = 1 To Config.TopCount : leds.Add(Color.Black) : Next
+                    Else
+                        MapSide(leds, zones, Config.TopCount, True, 0, gridW, Not cw)
+                    End If
+                    AddBlankLeds(leds, SettingsManager.Current.BlankAfterTop)
 
-        MapSide(leds, zones, Config.RightCount, False, gridW - 1, gridH)
-        AddBlankLeds(leds, SettingsManager.Current.BlankAfterRight)
+                Case 1 ' Right
+                    If SettingsManager.Current.TestMode Then
+                        For i As Integer = 1 To Config.RightCount : leds.Add(Color.Magenta) : Next
+                    ElseIf SettingsManager.Current.DiagSegments Then
+                        For i As Integer = 1 To Config.RightCount : leds.Add(If(i = 1 Or i = Config.RightCount, purpleBreath, Color.Black)) : Next
+                    ElseIf SettingsManager.Current.DiagGaps Then
+                        For i As Integer = 1 To Config.RightCount : leds.Add(Color.Black) : Next
+                    Else
+                        MapSide(leds, zones, Config.RightCount, False, gridW - 1, gridH, Not cw)
+                    End If
+                    AddBlankLeds(leds, SettingsManager.Current.BlankAfterRight)
 
-        MapSide(leds, zones, Config.BottomCount, True, gridH - 1, gridW, True)
-        AddBlankLeds(leds, SettingsManager.Current.BlankAfterBottom)
+                Case 2 ' Bottom
+                    If SettingsManager.Current.TestMode Then
+                        For i As Integer = 1 To Config.BottomCount : leds.Add(Color.Green) : Next
+                    ElseIf SettingsManager.Current.DiagSegments Then
+                        For i As Integer = 1 To Config.BottomCount : leds.Add(If(i = 1 Or i = Config.BottomCount, purpleBreath, Color.Black)) : Next
+                    ElseIf SettingsManager.Current.DiagGaps Then
+                        For i As Integer = 1 To Config.BottomCount : leds.Add(Color.Black) : Next
+                    Else
+                        MapSide(leds, zones, Config.BottomCount, True, gridH - 1, gridW, cw)
+                    End If
+                    AddBlankLeds(leds, SettingsManager.Current.BlankAfterBottom)
 
-        MapSide(leds, zones, Config.LeftCount, False, 0, gridH, True)
-        AddBlankLeds(leds, SettingsManager.Current.BlankAfterLeft)
-
-        ' Packet: [Header 2 bytes] + [RGB Data] + [Footer 1 byte]
-        Dim payload(leds.Count * 3 + 2) As Byte
-        payload(0) = &HFF ' Sync Header
-        payload(1) = &HAA
-
-        For i As Integer = 0 To leds.Count - 1
-            Dim offset As Integer = 2 + (i * 3)
-            Dim c As Color = leds(i)
-
-            ' Dynamically sort the bytes based on your Settings dropdown
-            Select Case SettingsManager.Current.ColorSequence
-                Case "GRB"
-                    payload(offset) = c.G : payload(offset + 1) = c.R : payload(offset + 2) = c.B
-                Case "BRG"
-                    payload(offset) = c.B : payload(offset + 1) = c.R : payload(offset + 2) = c.G
-                Case "BGR"
-                    payload(offset) = c.B : payload(offset + 1) = c.G : payload(offset + 2) = c.R
-                Case "RBG"
-                    payload(offset) = c.R : payload(offset + 1) = c.B : payload(offset + 2) = c.G
-                Case "GBR"
-                    payload(offset) = c.G : payload(offset + 1) = c.B : payload(offset + 2) = c.R
-                Case Else ' RGB (Default fallback)
-                    payload(offset) = c.R : payload(offset + 1) = c.G : payload(offset + 2) = c.B
+                Case 3 ' Left
+                    If SettingsManager.Current.TestMode Then
+                        For i As Integer = 1 To Config.LeftCount : leds.Add(Color.Blue) : Next
+                    ElseIf SettingsManager.Current.DiagSegments Then
+                        For i As Integer = 1 To Config.LeftCount : leds.Add(If(i = 1 Or i = Config.LeftCount, purpleBreath, Color.Black)) : Next
+                    ElseIf SettingsManager.Current.DiagGaps Then
+                        For i As Integer = 1 To Config.LeftCount : leds.Add(Color.Black) : Next
+                    Else
+                        MapSide(leds, zones, Config.LeftCount, False, 0, gridH, cw)
+                    End If
+                    AddBlankLeds(leds, SettingsManager.Current.BlankAfterLeft)
             End Select
         Next
-        payload(payload.Length - 1) = &HBB ' Footer
+
+BuildPacket:
+        ' --- PACKET CONSTRUCTION ---
+        Dim isWled As Boolean = (SettingsManager.Current.HardwareProtocol = "WLED (DRGB)")
+        Dim payload() As Byte
+        Dim offset As Integer
+
+        If isWled Then
+            ReDim payload(leds.Count * 3 + 1)
+            payload(0) = 2 ' DRGB Mode
+            payload(1) = 2 ' 2 Second Timeout
+            offset = 2
+        Else
+            ReDim payload(leds.Count * 3 + 2)
+            payload(0) = &HFF
+            payload(1) = &HAA
+            offset = 2
+        End If
+
+        For i As Integer = 0 To leds.Count - 1
+            Dim c As Color = leds(i)
+            Dim idx As Integer = offset + (i * 3)
+            Dim activeSeq As String = If(isWled, "RGB", SettingsManager.Current.ColorSequence)
+
+            Select Case activeSeq
+                Case "GRB" : payload(idx) = c.G : payload(idx + 1) = c.R : payload(idx + 2) = c.B
+                Case "BRG" : payload(idx) = c.B : payload(idx + 1) = c.R : payload(idx + 2) = c.G
+                Case "BGR" : payload(idx) = c.B : payload(idx + 1) = c.G : payload(idx + 2) = c.R
+                Case "RBG" : payload(idx) = c.R : payload(idx + 1) = c.B : payload(idx + 2) = c.G
+                Case "GBR" : payload(idx) = c.G : payload(idx + 1) = c.B : payload(idx + 2) = c.R
+                Case Else : payload(idx) = c.R : payload(idx + 1) = c.G : payload(idx + 2) = c.B
+            End Select
+        Next
+
+        If Not isWled Then payload(payload.Length - 1) = &HBB
 
         Try
             _client.Send(payload, payload.Length, _endpoint)
         Catch : End Try
     End Sub
-
     Private Sub MapSide(list As List(Of Color), zones(,) As Color, physicalCount As Integer, isHorizontal As Boolean, fixedIndex As Integer, gridSize As Integer, Optional reverse As Boolean = False)
         For i As Integer = 0 To physicalCount - 1
             Dim idx As Integer = CInt(Math.Floor((i / physicalCount) * gridSize))
@@ -79,9 +186,37 @@ Public Class Broadcaster
         Next
     End Sub
 
-    Private Sub AddBlankLeds(list As List(Of Color), count As Integer)
+    Private _animTick As Integer = 0 ' Master animation frame counter
+
+    Private Sub AddBlankLeds(leds As List(Of Color), count As Integer)
+        ' Inject Red if the Gap Diagnostic is active, otherwise keep them Black
+        Dim c As Color = If(SettingsManager.Current.DiagGaps, Color.Red, Color.Black)
         For i As Integer = 1 To count
-            list.Add(Color.Black) ' Forces the LED to remain off
+            leds.Add(c)
         Next
     End Sub
+
+
+
+    Public Sub ReleaseHardware()
+        Try
+            If SettingsManager.Current.HardwareProtocol = "WLED (DRGB)" Then
+                ' Sending a 1-byte packet containing '0' tells WLED to immediately exit real-time mode
+                Dim releasePacket() As Byte = {0}
+                _client.Send(releasePacket, releasePacket.Length, _endpoint)
+            Else
+                ' For PixelGlow Native, send a pure black packet to turn off the LEDs
+                Dim blackZones(Config.GridCols - 1, Config.GridRows - 1) As Color
+                For x = 0 To Config.GridCols - 1
+                    For y = 0 To Config.GridRows - 1
+                        blackZones(x, y) = Color.Black
+                    Next
+                Next
+                SendData(blackZones)
+            End If
+        Catch : End Try
+    End Sub
+
+
+
 End Class
