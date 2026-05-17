@@ -11,8 +11,9 @@ A high-performance, lightweight Windows ambient lighting system that harmonizes 
 4. [Hardware Setup](#hardware-setup)
 5. [Software Setup & Usage](#software-setup--usage)
 6. [Configuration Guide](#configuration-guide)
-7. [Credits](#credits)
-8. [License](#license)
+7. [Known Limitations](#known-limitations)
+8. [Credits](#credits)
+9. [License](#license)
 
 ---
 
@@ -125,6 +126,28 @@ A dedicated suite of mutually-exclusive hardware tests that bypass the screen en
 * **Sync Speed (ms):** The delay between screen captures. ~33ms provides approximately 30 frames per second.
 * **Temporal Smoothing:** Controls the fade speed between colors. Higher values mean faster, sharper transitions; lower values mean slow, cinematic fades.
 * **Auto-Crop Black Bars:** Enable to ignore letterboxing in movies. You can select standard or aggressive sensitivity.
+
+---
+
+## Known Limitations
+DRM & Hardware Acceleration (Netflix, Disney+, etc.)
+
+If you attempt to watch DRM-protected content on streaming platforms like Netflix, Disney+, Amazon Prime, or Hulu, you may notice that PixelGlow's Mimic Window shows a completely black screen where the video should be, and your LEDs will turn off. 
+
+**This is not a bug in PixelGlow.** It is an intentional, industry-wide restriction caused by Digital Rights Management (DRM). 
+
+To prevent movie piracy, modern browsers and native streaming apps use **Hardware Acceleration**. This sends the encrypted video stream directly to your graphics card (GPU) to be decoded, completely bypassing the standard Windows desktop environment. Because the video never actually renders on the Windows software layer, screen-capture engines like PixelGlow cannot see it.
+
+### How to Fix It (The Workarounds)
+
+If you want your ambient lighting to react to streaming services, you must force the video to render through software rather than your GPU.
+
+* **Method 1: Disable Hardware Acceleration in your Browser (Recommended)**
+  If you use Chrome, Edge, or Brave, go to your browser's **Settings > System**, and toggle **"Use graphics acceleration when available"** to **OFF**. Restart the browser. PixelGlow will now be able to see and react to the video. *(Note: Streaming services may restrict software-decoded video to 1080p).*
+* **Method 2: Try Firefox**
+  Firefox handles the Windows display pipeline differently than Chromium browsers. Often, simply watching your content in Firefox is enough to allow PixelGlow to capture the colors without changing any settings.
+* **Method 3: Avoid Native Windows Apps**
+  Dedicated streaming apps downloaded from the Microsoft Store (like the native Netflix app) are completely locked down by the operating system. You cannot disable hardware acceleration in them. You must watch your content in a web browser for PixelGlow to interact with it.
 
 ---
 
