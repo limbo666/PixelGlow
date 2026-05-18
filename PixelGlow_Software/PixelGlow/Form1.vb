@@ -1,6 +1,6 @@
 ﻿Imports System.Drawing
 Imports System.Windows.Forms
-
+Imports Microsoft.Win32
 Public Class Form1
     Private _isExiting As Boolean = False
     Private _mimicColorMode As Integer = 0 ' 0=Normal, 1=Red, 2=Green, 3=Blue, 4=White
@@ -37,6 +37,10 @@ Public Class Form1
 
         InitTray()
 
+        ' --- Listen for Windows Power & Lock Events ---
+        AddHandler SystemEvents.PowerModeChanged, AddressOf SystemPowerChanged
+        AddHandler SystemEvents.SessionSwitch, AddressOf SessionChanged
+
         ' Start hidden if the setting is enabled
         If SettingsManager.Current.StartInTray Then
             Me.WindowState = FormWindowState.Minimized
@@ -51,6 +55,29 @@ Public Class Form1
         AddHandler _uiTimer.Tick, Sub() Me.Invalidate()
         _uiTimer.Start()
     End Sub
+    ' --- WINDOWS POWER MANAGEMENT ---
+    Private Sub SystemPowerChanged(sender As Object, e As PowerModeChangedEventArgs)
+        ' Handles PC going to Sleep / Hibernation and Waking Up
+        If e.Mode = PowerModes.Suspend Then
+            Logger.Info("System suspending...")
+            _engine?.Suspend()
+        ElseIf e.Mode = PowerModes.Resume Then
+            Logger.Info("System resuming...")
+            _engine?.Resume()
+        End If
+    End Sub
+
+    Private Sub SessionChanged(sender As Object, e As SessionSwitchEventArgs)
+        ' Handles user locking the screen (Win + L) and unlocking
+        If e.Reason = SessionSwitchReason.SessionLock Then
+            Logger.Info("Screen locked...")
+            _engine?.Suspend()
+        ElseIf e.Reason = SessionSwitchReason.SessionUnlock Then
+            Logger.Info("Screen unlocked...")
+            _engine?.Resume()
+        End If
+    End Sub
+
 
     Private Sub InitTray()
         Dim trayMenu As New ContextMenuStrip()
@@ -156,6 +183,18 @@ Public Class Form1
             _mimicColorMode = 0
         End If
 
+        ' --- NEW: Tell the Engine to Override Hardware ---
+        If _engine IsNot Nothing Then
+            Select Case _mimicColorMode
+                Case 0 : _engine.MimicOverrideColor = Color.Empty
+                Case 1 : _engine.MimicOverrideColor = Color.Red
+                Case 2 : _engine.MimicOverrideColor = Color.Green
+                Case 3 : _engine.MimicOverrideColor = Color.Blue
+                Case 4 : _engine.MimicOverrideColor = Color.White
+            End Select
+        End If
+        ' ------------------------------------------------
+
         Me.Invalidate() ' Force immediate redraw
     End Sub
 
@@ -209,6 +248,10 @@ Public Class Form1
         RegistryHelper.SaveWindowBounds(Me)
         _engine?.ReleaseAndStop()
         _trayIcon?.Dispose()
+
+        ' Disconnect Windows OS listeners to prevent memory leaks
+        RemoveHandler SystemEvents.PowerModeChanged, AddressOf SystemPowerChanged
+        RemoveHandler SystemEvents.SessionSwitch, AddressOf SessionChanged
         If _settingsForm IsNot Nothing AndAlso Not _settingsForm.IsDisposed Then _settingsForm.Close()
         MyBase.OnFormClosing(e)
     End Sub

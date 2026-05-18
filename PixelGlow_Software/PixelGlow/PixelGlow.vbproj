@@ -5,9 +5,9 @@
 	<ApplicationIcon>Images\ic_PixelGlow1.ico</ApplicationIcon>
     <TargetFramework>net8.0-windows</TargetFramework>
 	  
-	  <Version>1.0.1.13</Version>
-	  <AssemblyVersion>1.0.1.13</AssemblyVersion>
-	  <FileVersion>1.0.1.13</FileVersion>
+	  <Version>1.0.1.14</Version>
+	  <AssemblyVersion>1.0.1.15</AssemblyVersion>
+	  <FileVersion>1.0.1.15</FileVersion>
 	  
     <StartupObject>Sub Main</StartupObject>
     <UseWindowsForms>true</UseWindowsForms>

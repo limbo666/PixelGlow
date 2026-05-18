@@ -12,13 +12,15 @@ Public Class AppSettings
     Public Property LoggingEnabled As Boolean = False
     Public Property StartInTray As Boolean = False
     Public Property StartWithWindows As Boolean = False
-
+    Public Property FollowPowerState As Boolean = True
+    Public Property DimOnPowerState As Boolean = False
 
     Public Property StartEdge As String = "Top"
     Public Property Direction As String = "Clockwise"
 
 
     Public Property TargetMonitorIndex As Integer = 0
+    Public Property ScreenCropPercent As Integer = 0 ' 0 to 25% edge cropping
 
     ' --- Premium Processing ---
     Public Property MaxBrightness As Integer = 100   ' 1 to 100%
@@ -53,4 +55,33 @@ Public Class AppSettings
     Public Property BlankAfterLeft As Integer = 0
 
     Public Property ColorSequence As String = "RGB"
+
+    ' --- Dynamic Profiles ---
+    Public Property Profiles As New List(Of PixelProfile)()
+End Class
+
+
+' --- NEW: Dynamic Profile System ---
+Public Class PixelProfile
+    Public Property ProfileName As String = "New Profile"
+    Public Property IsEnabled As Boolean = True
+
+    ' --- The Overrides (What changes when this profile is active) ---
+    Public Property OverrideHardwareProtocol As String = "" ' Leave blank to keep Base setting
+    Public Property OverrideTargetIP As String = ""
+    Public Property OverrideTargetPort As Integer = 0
+    Public Property OverrideMaxBrightness As Integer = -1 ' -1 means do not override
+
+    ' --- The Conditions (When does this activate?) ---
+    ' Condition 1: Time of Day
+    Public Property EnableTimeRule As Boolean = False
+    Public Property StartTime As String = "22:00"
+    Public Property EndTime As String = "07:00"
+
+    ' Condition 2: Active Application (Future-proofing)
+    Public Property EnableAppRule As Boolean = False
+    Public Property TargetExe As String = "netflix.exe"
+
+    ' Condition 3: Fullscreen (Future-proofing)
+    Public Property EnableFullscreenRule As Boolean = False
 End Class

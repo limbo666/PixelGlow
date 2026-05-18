@@ -8,9 +8,24 @@ Public Class Broadcaster
     Private _endpoint As IPEndPoint
     Public Property Config As New LedConfiguration()
 
-    Public Sub New(ip As String, port As Integer)
+    Public ReadOnly Property EndpointIP As String
+        Get
+            Return If(_endpoint IsNot Nothing, _endpoint.Address.ToString(), "")
+        End Get
+    End Property
+
+    Public ReadOnly Property EndpointPort As Integer
+        Get
+            Return If(_endpoint IsNot Nothing, _endpoint.Port, 0)
+        End Get
+    End Property
+
+    Private _activeProtocol As String
+
+    Public Sub New(ip As String, port As Integer, protocol As String)
         _client = New UdpClient() With {.EnableBroadcast = True}
         _endpoint = New IPEndPoint(IPAddress.Parse(ip), port)
+        _activeProtocol = protocol
     End Sub
 
     Public Sub SendData(zones(,) As Color)
@@ -135,7 +150,7 @@ Public Class Broadcaster
 
 BuildPacket:
         ' --- PACKET CONSTRUCTION ---
-        Dim isWled As Boolean = (SettingsManager.Current.HardwareProtocol = "WLED (DRGB)")
+        Dim isWled As Boolean = (_activeProtocol = "WLED (DRGB)")
         Dim payload() As Byte
         Dim offset As Integer
 
@@ -200,7 +215,7 @@ BuildPacket:
 
     Public Sub ReleaseHardware()
         Try
-            If SettingsManager.Current.HardwareProtocol = "WLED (DRGB)" Then
+            If _activeProtocol = "WLED (DRGB)" Then
                 ' Sending a 1-byte packet containing '0' tells WLED to immediately exit real-time mode
                 Dim releasePacket() As Byte = {0}
                 _client.Send(releasePacket, releasePacket.Length, _endpoint)
@@ -217,6 +232,45 @@ BuildPacket:
         Catch : End Try
     End Sub
 
+    Public Sub SendSolidColor(targetColor As Color, holdState As Boolean)
+        Dim totalLeds As Integer = Config.TopCount + Config.RightCount + Config.BottomCount + Config.LeftCount + SettingsManager.Current.BlankStart + SettingsManager.Current.BlankAfterTop + SettingsManager.Current.BlankAfterRight + SettingsManager.Current.BlankAfterBottom + SettingsManager.Current.BlankAfterLeft
 
+        Dim isWled As Boolean = (_activeProtocol = "WLED (DRGB)")
+        Dim payload() As Byte
+        Dim offset As Integer
+
+        If isWled Then
+            ReDim payload((totalLeds * 3) + 1)
+            payload(0) = 2 ' DRGB Mode
+            ' If holding state (dim), set WLED timeout to 255 (infinite). Otherwise, standard 2 seconds.
+            payload(1) = CByte(If(holdState, 255, 2))
+            offset = 2
+        Else
+            ReDim payload((totalLeds * 3) + 2)
+            payload(0) = &HFF
+            payload(1) = &HAA
+            offset = 2
+        End If
+
+        Dim activeSeq As String = If(isWled, "RGB", SettingsManager.Current.ColorSequence)
+
+        For i As Integer = 0 To totalLeds - 1
+            Dim idx As Integer = offset + (i * 3)
+            Select Case activeSeq
+                Case "GRB" : payload(idx) = targetColor.G : payload(idx + 1) = targetColor.R : payload(idx + 2) = targetColor.B
+                Case "BRG" : payload(idx) = targetColor.B : payload(idx + 1) = targetColor.R : payload(idx + 2) = targetColor.G
+                Case "BGR" : payload(idx) = targetColor.B : payload(idx + 1) = targetColor.G : payload(idx + 2) = targetColor.R
+                Case "RBG" : payload(idx) = targetColor.R : payload(idx + 1) = targetColor.B : payload(idx + 2) = targetColor.G
+                Case "GBR" : payload(idx) = targetColor.G : payload(idx + 1) = targetColor.B : payload(idx + 2) = targetColor.R
+                Case Else : payload(idx) = targetColor.R : payload(idx + 1) = targetColor.G : payload(idx + 2) = targetColor.B
+            End Select
+        Next
+
+        If Not isWled Then payload(payload.Length - 1) = &HBB
+
+        Try
+            _client.Send(payload, payload.Length, _endpoint)
+        Catch : End Try
+    End Sub
 
 End Class

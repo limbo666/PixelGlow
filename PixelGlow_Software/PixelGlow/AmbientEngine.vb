@@ -2,12 +2,20 @@
 Imports System.Drawing.Imaging
 Imports System.Runtime.InteropServices
 Imports System.Threading
+Imports PixelGlow.AppSettings
 
 Public Class AmbientEngine
     Private _running As Boolean
+    Private _isSuspended As Boolean = False ' Tracks Lock/Sleep state
     Private _workerThread As Thread
     Private ReadOnly _engineLock As New Object()
 
+    ' --- Profile State Trackers ---
+    Private _currentProfileName As String = "BASE"
+    Private _currentBrightness As Integer = 100
+
+    ' --- Mimic Hotkey Tracker ---
+    Public Property MimicOverrideColor As Color = Color.Empty
     Public Property Broadcaster As Broadcaster
     Public Property CurrentZones As Color(,)
 
@@ -30,7 +38,7 @@ Public Class AmbientEngine
         SettingsManager.Load()
         Dim actIP As String = If(SettingsManager.Current.HardwareProtocol = "WLED (DRGB)", SettingsManager.Current.WledIP, SettingsManager.Current.TargetIP)
         Dim actPort As Integer = If(SettingsManager.Current.HardwareProtocol = "WLED (DRGB)", SettingsManager.Current.WledPort, SettingsManager.Current.TargetPort)
-        Broadcaster = New Broadcaster(actIP, actPort)
+        Broadcaster = New Broadcaster(actIP, actPort, SettingsManager.Current.HardwareProtocol)
         ApplyConfigToBroadcaster()
         UpdateGrid()
     End Sub
@@ -39,7 +47,7 @@ Public Class AmbientEngine
         SyncLock _engineLock
             Dim actIP As String = If(SettingsManager.Current.HardwareProtocol = "WLED (DRGB)", SettingsManager.Current.WledIP, SettingsManager.Current.TargetIP)
             Dim actPort As Integer = If(SettingsManager.Current.HardwareProtocol = "WLED (DRGB)", SettingsManager.Current.WledPort, SettingsManager.Current.TargetPort)
-            Broadcaster = New Broadcaster(actIP, actPort)
+            Broadcaster = New Broadcaster(actIP, actPort, SettingsManager.Current.HardwareProtocol)
             ApplyConfigToBroadcaster()
             UpdateGrid()
             _activeBounds = Rectangle.Empty
@@ -81,6 +89,13 @@ Public Class AmbientEngine
     Public Sub [Stop]()
         _running = False
     End Sub
+    Public Sub Suspend()
+        If SettingsManager.Current.FollowPowerState Then _isSuspended = True
+    End Sub
+
+    Public Sub [Resume]()
+        If SettingsManager.Current.FollowPowerState Then _isSuspended = False
+    End Sub
 
     Private Sub LoopEngine()
         Logger.Info("Ambient Engine Thread Started.")
@@ -94,6 +109,40 @@ Public Class AmbientEngine
                     Logger.Info("Heartbeat: Engine loop is running fine.")
                     frameCounter = 0
                 End If
+
+                ' --- PROFILE EVALUATOR ---
+                SyncLock _engineLock
+                    CheckAndApplyProfileSwitches()
+                End SyncLock
+
+                ' --- MIMIC HOTKEY BYPASS ---
+                If MimicOverrideColor <> Color.Empty Then
+                    SyncLock _engineLock
+                        If SettingsManager.Current.ControlHardware Then
+                            Broadcaster.SendSolidColor(MimicOverrideColor, False)
+                        End If
+                    End SyncLock
+                    Thread.Sleep(33) ' Keep sending the hardware heartbeat at ~30fps
+                    Continue While ' Skip screen capture completely
+                End If
+
+                ' --- SUSPEND / DIM STATE BYPASS ---
+                If _isSuspended Then
+                    If SettingsManager.Current.DimOnPowerState Then
+                        ' Send a heartbeat dim packet twice a second to keep the hardware watchdog alive
+                        SyncLock _engineLock
+                            If SettingsManager.Current.ControlHardware Then
+                                Broadcaster.SendSolidColor(Color.FromArgb(15, 12, 10), False)
+                            End If
+                        End SyncLock
+                        Thread.Sleep(500)
+                    Else
+                        ' If Dim is disabled, just sleep. The hardware's 2-second watchdog will safely fade it to black.
+                        Thread.Sleep(1000)
+                    End If
+                    Continue While ' Skip screen capture completely
+                End If
+                ' ----------------------------------
 
                 SyncLock _engineLock
                     CaptureScreen()
@@ -131,7 +180,21 @@ Public Class AmbientEngine
         End If
         Dim mIndex As Integer = SettingsManager.Current.TargetMonitorIndex
         If mIndex >= Screen.AllScreens.Length OrElse mIndex < 0 Then mIndex = 0
-        Dim monitorBounds = Screen.AllScreens(mIndex).Bounds
+        Dim rawBounds = Screen.AllScreens(mIndex).Bounds
+
+        ' --- NEW: Apply Edge Crop (Zoom) ---
+        Dim cropPct As Double = SettingsManager.Current.ScreenCropPercent / 100.0
+        Dim cropX As Integer = CInt(rawBounds.Width * cropPct)
+        Dim cropY As Integer = CInt(rawBounds.Height * cropPct)
+
+        ' Create the new inner rectangle
+        Dim monitorBounds As New Rectangle(
+            rawBounds.X + cropX,
+            rawBounds.Y + cropY,
+            rawBounds.Width - (cropX * 2),
+            rawBounds.Height - (cropY * 2)
+        )
+        ' -----------------------------------
 
         Try
             Using bmp As New Bitmap(monitorBounds.Width, monitorBounds.Height)
@@ -280,10 +343,100 @@ Public Class AmbientEngine
         If avgR < 20 AndAlso avgG < 20 AndAlso avgB < 20 Then Return Color.Black
         Return Color.FromArgb(255, avgR, avgG, avgB)
     End Function
+    ' --- PROFILE EVALUATOR ---
+    Private Function GetActiveProfile() As PixelProfile
+        ' If the user hasn't created any profiles, just return Nothing (use base settings)
+        If SettingsManager.Current.Profiles Is Nothing OrElse SettingsManager.Current.Profiles.Count = 0 Then Return Nothing
 
+        Dim nowT As TimeSpan = DateTime.Now.TimeOfDay
+
+        ' Check each profile in order. The first one that matches its conditions wins.
+        For Each p As PixelProfile In SettingsManager.Current.Profiles
+            If Not p.IsEnabled Then Continue For
+
+            Dim conditionsMet As Boolean = True
+
+            ' Check Time Condition
+            If p.EnableTimeRule Then
+                Dim startT As TimeSpan
+                Dim endT As TimeSpan
+
+                If TimeSpan.TryParse(p.StartTime, startT) AndAlso TimeSpan.TryParse(p.EndTime, endT) Then
+                    Dim isNightTime As Boolean = False
+                    If startT < endT Then
+                        isNightTime = (nowT >= startT AndAlso nowT <= endT)
+                    Else ' Spans across midnight
+                        isNightTime = (nowT >= startT OrElse nowT <= endT)
+                    End If
+
+                    If Not isNightTime Then conditionsMet = False
+                Else
+                    conditionsMet = False ' Failed to parse time, invalidate this rule
+                End If
+            End If
+
+            ' (Future: Add App Detection and Fullscreen checks here, setting conditionsMet = False if they fail)
+
+            ' If this profile survived all active checks, it is the winner!
+            If conditionsMet Then Return p
+        Next
+
+        ' No profiles met their conditions, revert to Base
+        Return Nothing
+    End Function
+    Private Sub CheckAndApplyProfileSwitches()
+        Dim activeProf As PixelProfile = GetActiveProfile()
+        Dim targetProfileName As String = If(activeProf IsNot Nothing, activeProf.ProfileName, "BASE")
+
+        ' If the profile hasn't changed since the last frame, do nothing.
+        If targetProfileName = _currentProfileName Then Return
+
+        Logger.Info($"Profile Switch Detected: Switching from '{_currentProfileName}' to '{targetProfileName}'")
+        _currentProfileName = targetProfileName
+
+        ' 1. Apply Brightness
+        _currentBrightness = If(activeProf IsNot Nothing AndAlso activeProf.OverrideMaxBrightness <> -1,
+                                activeProf.OverrideMaxBrightness,
+                                SettingsManager.Current.MaxBrightness)
+
+        ' 2. Apply Hardware Changes (Only if the profile specifies an override)
+        Dim baseProto As String = SettingsManager.Current.HardwareProtocol
+        Dim baseIP As String = If(baseProto = "WLED (DRGB)", SettingsManager.Current.WledIP, SettingsManager.Current.TargetIP)
+        Dim basePort As Integer = If(baseProto = "WLED (DRGB)", SettingsManager.Current.WledPort, SettingsManager.Current.TargetPort)
+
+        Dim newProto As String = baseProto
+        Dim newIP As String = baseIP
+        Dim newPort As Integer = basePort
+
+        If activeProf IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(activeProf.OverrideHardwareProtocol) Then
+            newProto = activeProf.OverrideHardwareProtocol
+            newIP = If(Not String.IsNullOrWhiteSpace(activeProf.OverrideTargetIP), activeProf.OverrideTargetIP, baseIP)
+            newPort = If(activeProf.OverrideTargetPort > 0, activeProf.OverrideTargetPort, basePort)
+        End If
+
+        ' If the hardware target is different than what the Broadcaster is currently using, we must reboot it.
+        Dim requiresHardwareSwap As Boolean = False
+        If Broadcaster IsNot Nothing Then
+            ' Check if we switched WLED vs Native, or changed IP/Port
+            Dim currentIsWled As Boolean = (baseProto = "WLED (DRGB)")
+            Dim newIsWled As Boolean = (newProto = "WLED (DRGB)")
+
+            If currentIsWled <> newIsWled OrElse Broadcaster.EndpointIP <> newIP OrElse Broadcaster.EndpointPort <> newPort Then
+                requiresHardwareSwap = True
+            End If
+        End If
+
+        If requiresHardwareSwap Then
+            Logger.Info($"Rebooting Broadcaster for Profile Hardware Switch: {newIP}:{newPort} ({newProto})")
+            Broadcaster.ReleaseHardware() ' Release the old one gracefully
+
+            Broadcaster = New Broadcaster(newIP, newPort, newProto)
+            ApplyConfigToBroadcaster()
+        End If
+    End Sub
     Private Function ApplyColorCorrection(c As Color) As Color
-        ' 1. Apply Global Brightness
-        Dim bri As Single = SettingsManager.Current.MaxBrightness / 100.0F
+        ' 1. Apply Dynamic Profile Brightness
+        Dim bri As Single = _currentBrightness / 100.0F
         Dim r As Single = c.R * bri
         Dim g As Single = c.G * bri
         Dim b As Single = c.B * bri

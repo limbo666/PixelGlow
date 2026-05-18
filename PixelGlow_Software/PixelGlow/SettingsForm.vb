@@ -5,10 +5,11 @@ Imports System.Text.RegularExpressions
 Public Class SettingsForm
     Inherits Form
 
+
     ' UI Controls
     Private _txtIP As TextBox
     Private _numPort, _numTop, _numBottom, _numLeft, _numRight As NumericUpDown
-    Private _numInterval, _numSmooth, _numSat, _numBright As NumericUpDown
+    Private _numInterval, _numSmooth, _numSat, _numBright, _numCrop As NumericUpDown
     Private _numGapStart, _numGapTop, _numGapRight, _numGapBottom, _numGapLeft As NumericUpDown
     Private _cmbMonitor, _cmbSensitivity, _cmbColorOrder, _cmbGridSize As ComboBox
     Private _cmbStartEdge, _cmbDirection As ComboBox
@@ -16,11 +17,22 @@ Public Class SettingsForm
     Private _chkBlackBar, _chkTestMode, _chkGrid, _chkLogging, _chkControlHw As CheckBox
     Private _chkDiagSegments, _chkDiagGaps, _chkDiagSweep, _chkDiagBullet As CheckBox
     Private _chkStartInTray, _chkStartWithWindows As CheckBox
+    Private _chkFollowPower, _chkDimOnPower As CheckBox
     Private _lblStatus As Label
 
     ' Virtual Tab Infrastructure
     Private _btnDisp, _btnNet, _btnLeds, _btnEng, _btnGen, _btnDiag As Button
     Private _tabDisp, _tabNet, _tabLeds, _tabEng, _tabGen, _tabDiag As Panel
+    ' Profile UI Variables
+    Private _btnProf As Button
+    Private _tabProf As Panel
+    Private _cmbProfileSelect, _cmbProfProto As ComboBox
+    Private _txtProfName, _txtProfStart, _txtProfEnd, _txtProfIP As TextBox
+    Private _chkProfEnabled, _chkProfTime As CheckBox
+    Private _numProfBri, _numProfPort As NumericUpDown
+    Private _isLoadingProfile As Boolean = False
+    Private _lastSelectedProfileIndex As Integer = -1 ' Tracks the correct profile memory slot
+
 
     ' NEW: Real-time update event
     Public Event SettingsApplied As EventHandler
@@ -95,7 +107,9 @@ Public Class SettingsForm
         _btnLeds = CreateSidebarButton("Hardware Layout", sidebar)
         _btnEng = CreateSidebarButton("Engine", sidebar)
         _btnDiag = CreateSidebarButton("Diagnostics", sidebar)
-
+        _tabProf = CreateTabPanel()
+        contentArea.Controls.Add(_tabProf)
+        _btnProf = CreateSidebarButton("Profiles", sidebar)
 
 
         ' === TAB 1: Display ===
@@ -115,6 +129,8 @@ Public Class SettingsForm
         End Select
 
         _chkGrid = AddCheckBoxRow("Show Detection Grid", SettingsManager.Current.ShowDetectionGrid, "Displays a transparent overlay showing exactly where the engine is sampling colors.", tblDisp)
+        _numCrop = AddNumericRow("Edge Crop (Zoom) %", 0, 25, SettingsManager.Current.ScreenCropPercent, "Crops the outer edges of the screen to ignore taskbars and window borders. 0 = Full Screen.", tblDisp)
+
         ' === TAB 2: Network ===
         AddTabHeader("Network", _tabNet)
         Dim tblNet = CreateTable(_tabNet)
@@ -282,11 +298,21 @@ Public Class SettingsForm
         AddTabHeader("General Settings", _tabGen)
         Dim tblGen = CreateTable(_tabGen)
 
+        AddSectionHeader("General", tblGen)
         _chkControlHw = AddCheckBoxRow("Control Hardware", SettingsManager.Current.ControlHardware, "Sends color data over the network. Uncheck to temporarily pause LED lighting.", tblGen)
         _chkStartInTray = AddCheckBoxRow("Start in Tray", SettingsManager.Current.StartInTray, "Launches the application hidden in the system tray instead of showing the mimic screen.", tblGen)
         _chkStartWithWindows = AddCheckBoxRow("Start with Windows", SettingsManager.Current.StartWithWindows, "Automatically launches PixelGlow when you log into your computer.", tblGen)
+
+        AddSectionHeader("Power Management", tblGen)
+        _chkFollowPower = AddCheckBoxRow("Follow OS Power State", SettingsManager.Current.FollowPowerState, "Automatically pauses the ambient lighting when Windows goes to sleep or the screen is locked.", tblGen)
+        _chkDimOnPower = AddCheckBoxRow("Dim Lights on Lock/Sleep", SettingsManager.Current.DimOnPowerState, "Instead of turning off completely, fade the LEDs to a very dim white glow.", tblGen)
+
+        AddSectionHeader("Tools", tblGen)
         _chkLogging = AddCheckBoxRow("Enable Logging", SettingsManager.Current.LoggingEnabled, "Writes background diagnostic information to a log file for troubleshooting.", tblGen)
 
+        ' Link the Power checkboxes
+        _chkDimOnPower.Enabled = _chkFollowPower.Checked
+        AddHandler _chkFollowPower.CheckedChanged, Sub() _chkDimOnPower.Enabled = _chkFollowPower.Checked
 
         ' --- Cross-Tab UI Sync for WLED ---
         ' Grab the description label for the Color Sequence dropdown from the Layout table
@@ -307,6 +333,76 @@ Public Class SettingsForm
         AddHandler _cmbProtocol.SelectedIndexChanged, Sub() syncCrossTabUi()
         syncCrossTabUi()
 
+
+        ' === TAB 6: Profiles ===
+        AddTabHeader("Automated Profiles", _tabProf)
+        Dim tblProf = CreateTable(_tabProf)
+
+        ' Profile Header & Buttons
+        Dim pnlHeader As New FlowLayoutPanel() With {.Dock = DockStyle.Fill, .AutoSize = True}
+        _cmbProfileSelect = New ComboBox() With {.DropDownStyle = ComboBoxStyle.DropDownList, .Width = 200}
+        Dim btnAddProf As New Button() With {.Text = "New Profile", .Width = 100, .Height = 26, .FlatStyle = FlatStyle.Flat}
+        Dim btnDelProf As New Button() With {.Text = "Delete", .Width = 70, .Height = 26, .FlatStyle = FlatStyle.Flat, .ForeColor = Color.Firebrick}
+        pnlHeader.Controls.AddRange({_cmbProfileSelect, btnAddProf, btnDelProf})
+
+        Dim rProf = tblProf.RowCount
+        tblProf.RowCount += 1
+        tblProf.RowStyles.Add(New RowStyle(SizeType.AutoSize))
+        tblProf.Controls.Add(New Label() With {.Text = "Select Profile:", .Font = New Font("Segoe UI", 9.5F, FontStyle.Bold), .Dock = DockStyle.Fill, .TextAlign = ContentAlignment.TopRight, .Padding = New Padding(0, 4, 10, 0)}, 0, rProf)
+        tblProf.Controls.Add(pnlHeader, 1, rProf)
+
+        AddSectionHeader("Profile Settings", tblProf)
+        _txtProfName = AddTextBoxRow("Profile Name", "", "Display name for this rule.", tblProf)
+        _chkProfEnabled = AddCheckBoxRow("Enable Profile", False, "Allow this profile to activate when conditions are met.", tblProf)
+
+        AddSectionHeader("Activation Conditions", tblProf)
+        _chkProfTime = AddCheckBoxRow("Time of Day", False, "Activate during a specific time window.", tblProf)
+
+        Dim pnlTime As New FlowLayoutPanel() With {.Dock = DockStyle.Fill, .AutoSize = True}
+        _txtProfStart = New TextBox() With {.Width = 60}
+        _txtProfEnd = New TextBox() With {.Width = 60}
+        pnlTime.Controls.AddRange({New Label() With {.Text = "Start (HH:MM):", .AutoSize = True, .Padding = New Padding(0, 4, 0, 0)}, _txtProfStart,
+                                   New Label() With {.Text = "End (HH:MM):", .AutoSize = True, .Padding = New Padding(10, 4, 0, 0)}, _txtProfEnd})
+        rProf = tblProf.RowCount
+        tblProf.RowCount += 1
+        tblProf.RowStyles.Add(New RowStyle(SizeType.AutoSize))
+        tblProf.Controls.Add(pnlTime, 1, rProf)
+
+        AddSectionHeader("Overrides (Leave blank to use Base Settings)", tblProf)
+        _numProfBri = AddNumericRow("Brightness Override (%)", -1, 100, -1, "Set to -1 to ignore and use Base Brightness.", tblProf)
+
+        _cmbProfProto = AddComboBoxRow("Hardware Protocol", "Override receiver type.", tblProf)
+        _cmbProfProto.Items.AddRange(New String() {"", "PixelGlow Native", "WLED (DRGB)"})
+
+        _txtProfIP = AddTextBoxRow("Target IP Override", "", "Leave blank to use Base IP.", tblProf)
+        _numProfPort = AddNumericRow("UDP Port Override", 0, 65535, 0, "Set to 0 to use Base Port.", tblProf)
+
+        ' Profile Logic Wiring
+        AddHandler btnAddProf.Click, Sub()
+                                         SaveActiveProfileUI()
+                                         SettingsManager.Current.Profiles.Add(New PixelProfile() With {.ProfileName = "New Profile"})
+                                         RefreshProfileList(SettingsManager.Current.Profiles.Count - 1)
+                                     End Sub
+
+        AddHandler btnDelProf.Click, Sub()
+                                         If _cmbProfileSelect.SelectedIndex >= 0 Then
+                                             SettingsManager.Current.Profiles.RemoveAt(_cmbProfileSelect.SelectedIndex)
+                                             RefreshProfileList(0)
+                                         End If
+                                     End Sub
+
+        AddHandler _cmbProfileSelect.SelectedIndexChanged, Sub()
+                                                               If Not _isLoadingProfile Then
+                                                                   ' Save current screen text to the OLD profile slot
+                                                                   SaveActiveProfileUI()
+                                                                   ' Update our tracker to the NEW profile slot
+                                                                   _lastSelectedProfileIndex = _cmbProfileSelect.SelectedIndex
+                                                                   ' Load the NEW profile data to the screen
+                                                                   LoadSelectedProfile()
+                                                               End If
+                                                           End Sub
+        RefreshProfileList(0)
+
         ' --- Restore the last selected tab ---
         Select Case SettingsManager.Current.LastSettingsTab
             Case 0 : SidebarClick(_btnGen, EventArgs.Empty)
@@ -315,6 +411,7 @@ Public Class SettingsForm
             Case 3 : SidebarClick(_btnLeds, EventArgs.Empty)
             Case 4 : SidebarClick(_btnEng, EventArgs.Empty)
             Case 5 : SidebarClick(_btnDiag, EventArgs.Empty)
+            Case 6 : SidebarClick(_btnProf, EventArgs.Empty)
             Case Else : SidebarClick(_btnGen, EventArgs.Empty)
         End Select
     End Sub
@@ -360,10 +457,9 @@ Public Class SettingsForm
     End Function
 
     Private Sub SidebarClick(sender As Object, e As EventArgs)
-        _tabDisp.Visible = False : _tabNet.Visible = False : _tabLeds.Visible = False : _tabEng.Visible = False : _tabGen.Visible = False : _tabDiag.Visible = False
+        _tabDisp.Visible = False : _tabNet.Visible = False : _tabLeds.Visible = False : _tabEng.Visible = False : _tabGen.Visible = False : _tabDiag.Visible = False : _tabProf.Visible = False
         _btnDisp.BackColor = Color.FromArgb(30, 30, 35) : _btnNet.BackColor = Color.FromArgb(30, 30, 35)
-        _btnLeds.BackColor = Color.FromArgb(30, 30, 35) : _btnEng.BackColor = Color.FromArgb(30, 30, 35) : _btnGen.BackColor = Color.FromArgb(30, 30, 35) : _btnDiag.BackColor = Color.FromArgb(30, 30, 35)
-
+        _btnLeds.BackColor = Color.FromArgb(30, 30, 35) : _btnEng.BackColor = Color.FromArgb(30, 30, 35) : _btnGen.BackColor = Color.FromArgb(30, 30, 35) : _btnDiag.BackColor = Color.FromArgb(30, 30, 35) : _btnProf.BackColor = Color.FromArgb(30, 30, 35)
         Dim clicked = DirectCast(sender, Button)
         clicked.BackColor = Color.FromArgb(0, 120, 215)
 
@@ -373,6 +469,7 @@ Public Class SettingsForm
         If clicked Is _btnNet Then _tabNet.Visible = True : _tabNet.BringToFront() : SettingsManager.Current.LastSettingsTab = 2
         If clicked Is _btnLeds Then _tabLeds.Visible = True : _tabLeds.BringToFront() : SettingsManager.Current.LastSettingsTab = 3
         If clicked Is _btnEng Then _tabEng.Visible = True : _tabEng.BringToFront() : SettingsManager.Current.LastSettingsTab = 4
+        If clicked Is _btnProf Then _tabProf.Visible = True : _tabProf.BringToFront() : SettingsManager.Current.LastSettingsTab = 6
         If clicked Is _btnDiag Then _tabDiag.Visible = True : _tabDiag.BringToFront() : SettingsManager.Current.LastSettingsTab = 5
     End Sub
 
@@ -459,6 +556,9 @@ Public Class SettingsForm
     ' --- REAL-TIME APPLY LOGIC ---
     Private Sub ValidateAndSave(closeForm As Boolean)
         Dim ipPattern As String = "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+        ' Commit any profile edits currently on the screen to memory before saving
+        SaveActiveProfileUI()
+
         If _txtIP.Text <> "255.255.255.255" AndAlso Not Regex.IsMatch(_txtIP.Text, ipPattern) Then
             _lblStatus.Text = "Invalid IP Address format."
             Return
@@ -467,6 +567,7 @@ Public Class SettingsForm
 
         With SettingsManager.Current
             .TargetMonitorIndex = CInt(Math.Max(0, _cmbMonitor.SelectedIndex))
+            .ScreenCropPercent = CInt(_numCrop.Value)
 
             Select Case _cmbGridSize.SelectedIndex
                 Case 0 : .GridCols = 16 : .GridRows = 9
@@ -518,6 +619,8 @@ Public Class SettingsForm
             .ControlHardware = _chkControlHw.Checked
             .StartInTray = _chkStartInTray.Checked
             .StartWithWindows = _chkStartWithWindows.Checked
+            .FollowPowerState = _chkFollowPower.Checked
+            .DimOnPowerState = _chkDimOnPower.Checked
             .LoggingEnabled = _chkLogging.Checked
         End With
 
@@ -554,4 +657,81 @@ Public Class SettingsForm
 
         MyBase.OnFormClosing(e)
     End Sub
+
+    ' --- PROFILE UI LOGIC ---
+    Private Sub RefreshProfileList(selectedIndex As Integer)
+        _isLoadingProfile = True
+        _cmbProfileSelect.Items.Clear()
+        For Each p In SettingsManager.Current.Profiles
+            _cmbProfileSelect.Items.Add(p.ProfileName)
+        Next
+        If _cmbProfileSelect.Items.Count > 0 Then
+            Dim targetIndex As Integer = If(selectedIndex >= 0 AndAlso selectedIndex < _cmbProfileSelect.Items.Count, selectedIndex, 0)
+            _cmbProfileSelect.SelectedIndex = targetIndex
+            _lastSelectedProfileIndex = targetIndex
+            LoadSelectedProfile()
+        Else
+            _lastSelectedProfileIndex = -1
+            ClearProfileUI()
+        End If
+        _isLoadingProfile = False
+    End Sub
+
+    Private Sub LoadSelectedProfile()
+        If _cmbProfileSelect.SelectedIndex < 0 Then Return
+        _isLoadingProfile = True
+        Dim p = SettingsManager.Current.Profiles(_cmbProfileSelect.SelectedIndex)
+
+        _txtProfName.Text = p.ProfileName
+        _chkProfEnabled.Checked = p.IsEnabled
+        _chkProfTime.Checked = p.EnableTimeRule
+        _txtProfStart.Text = p.StartTime
+        _txtProfEnd.Text = p.EndTime
+        _numProfBri.Value = p.OverrideMaxBrightness
+
+        _cmbProfProto.SelectedItem = If(String.IsNullOrEmpty(p.OverrideHardwareProtocol), "", p.OverrideHardwareProtocol)
+        If _cmbProfProto.SelectedIndex = -1 Then _cmbProfProto.SelectedIndex = 0
+        _txtProfIP.Text = p.OverrideTargetIP
+        _numProfPort.Value = p.OverrideTargetPort
+
+        _isLoadingProfile = False
+    End Sub
+
+    Private Sub ClearProfileUI()
+        _isLoadingProfile = True
+        _txtProfName.Text = ""
+        _chkProfEnabled.Checked = False
+        _chkProfTime.Checked = False
+        _txtProfStart.Text = ""
+        _txtProfEnd.Text = ""
+        _numProfBri.Value = -1
+        _cmbProfProto.SelectedIndex = 0
+        _txtProfIP.Text = ""
+        _numProfPort.Value = 0
+        _isLoadingProfile = False
+    End Sub
+
+    Private Sub SaveActiveProfileUI()
+        If _isLoadingProfile OrElse _lastSelectedProfileIndex < 0 OrElse _lastSelectedProfileIndex >= SettingsManager.Current.Profiles.Count Then Return
+        Dim p = SettingsManager.Current.Profiles(_lastSelectedProfileIndex)
+
+        p.ProfileName = _txtProfName.Text
+        p.IsEnabled = _chkProfEnabled.Checked
+        p.EnableTimeRule = _chkProfTime.Checked
+        p.StartTime = _txtProfStart.Text
+        p.EndTime = _txtProfEnd.Text
+        p.OverrideMaxBrightness = CInt(_numProfBri.Value)
+
+        p.OverrideHardwareProtocol = _cmbProfProto.SelectedItem.ToString()
+        p.OverrideTargetIP = _txtProfIP.Text
+        p.OverrideTargetPort = CInt(_numProfPort.Value)
+
+        ' Update listbox text gracefully without firing index-changed loops
+        If _cmbProfileSelect.Items(_lastSelectedProfileIndex).ToString() <> p.ProfileName Then
+            _isLoadingProfile = True
+            _cmbProfileSelect.Items(_lastSelectedProfileIndex) = p.ProfileName
+            _isLoadingProfile = False
+        End If
+    End Sub
+
 End Class
