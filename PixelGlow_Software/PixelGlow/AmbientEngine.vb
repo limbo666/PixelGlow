@@ -2,57 +2,79 @@
 Imports System.Drawing.Imaging
 Imports System.Runtime.InteropServices
 Imports System.Threading
-Imports PixelGlow.AppSettings
 
 Public Class AmbientEngine
     Private _running As Boolean
-    Private _isSuspended As Boolean = False ' Tracks Lock/Sleep state
+    Private _isSuspended As Boolean = False
     Private _workerThread As Thread
     Private ReadOnly _engineLock As New Object()
 
-    ' --- Profile State Trackers ---
+    ' State Trackers
     Private _currentProfileName As String = "BASE"
     Private _currentBrightness As Integer = 100
-
-    ' --- Mimic Hotkey Tracker ---
     Public Property MimicOverrideColor As Color = Color.Empty
+
     Public Property Broadcaster As Broadcaster
     Public Property CurrentZones As Color(,)
 
     Private _frameCount As Integer = 0
     Private _activeBounds As Rectangle
 
+    Public ReadOnly Property LayoutMode As String
+        Get
+            Return If(Broadcaster IsNot Nothing AndAlso Broadcaster.ActivePreset IsNot Nothing, If(String.IsNullOrEmpty(Broadcaster.ActivePreset.LayoutMode), "Standard Perimeter", Broadcaster.ActivePreset.LayoutMode), "Standard Perimeter")
+        End Get
+    End Property
+
+    Public ReadOnly Property LinearZones As Integer
+        Get
+            Return If(Broadcaster IsNot Nothing AndAlso Broadcaster.ActivePreset IsNot Nothing, Math.Max(1, Broadcaster.ActivePreset.LinearZones), 32)
+        End Get
+    End Property
+
+    Public ReadOnly Property CaptureThickness As Double
+        Get
+            Return If(Broadcaster IsNot Nothing AndAlso Broadcaster.ActivePreset IsNot Nothing, Math.Max(1, Broadcaster.ActivePreset.CaptureThickness) / 100.0, 0.2)
+        End Get
+    End Property
+
     Public ReadOnly Property GridCols As Integer
         Get
-            Return Broadcaster.Config.GridCols
+            If LayoutMode = "Horizontal Center (Lightbar)" Then Return LinearZones
+            If LayoutMode = "Vertical Center (Towers)" Then Return 1
+            Return If(Broadcaster IsNot Nothing AndAlso Broadcaster.ActivePreset IsNot Nothing, Broadcaster.ActivePreset.GridCols, 16)
         End Get
     End Property
 
     Public ReadOnly Property GridRows As Integer
         Get
-            Return Broadcaster.Config.GridRows
+            If LayoutMode = "Vertical Center (Towers)" Then Return LinearZones
+            If LayoutMode = "Horizontal Center (Lightbar)" Then Return 1
+            Return If(Broadcaster IsNot Nothing AndAlso Broadcaster.ActivePreset IsNot Nothing, Broadcaster.ActivePreset.GridRows, 9)
         End Get
     End Property
 
+    ' Helper to safely grab the hardware preset the user currently has selected in the UI
+    Public Function GetActivePreset() As HardwarePreset
+        If SettingsManager.Current.HardwarePresets Is Nothing OrElse SettingsManager.Current.HardwarePresets.Count = 0 Then
+            Return New HardwarePreset() ' Failsafe
+        End If
+        Dim p = SettingsManager.Current.HardwarePresets.FirstOrDefault(Function(x) x.PresetName = SettingsManager.Current.ActivePresetName)
+        Return If(p IsNot Nothing, p, SettingsManager.Current.HardwarePresets(0))
+    End Function
+
     Public Sub New()
         SettingsManager.Load()
-        Dim actIP As String = If(SettingsManager.Current.HardwareProtocol = "WLED (DRGB)", SettingsManager.Current.WledIP, SettingsManager.Current.TargetIP)
-        Dim actPort As Integer = If(SettingsManager.Current.HardwareProtocol = "WLED (DRGB)", SettingsManager.Current.WledPort, SettingsManager.Current.TargetPort)
-        Broadcaster = New Broadcaster(actIP, actPort, SettingsManager.Current.HardwareProtocol)
-        ApplyConfigToBroadcaster()
+        Broadcaster = New Broadcaster(GetActivePreset())
         UpdateGrid()
     End Sub
 
     Public Sub ReloadSettings()
         SyncLock _engineLock
-            Dim actIP As String = If(SettingsManager.Current.HardwareProtocol = "WLED (DRGB)", SettingsManager.Current.WledIP, SettingsManager.Current.TargetIP)
-            Dim actPort As Integer = If(SettingsManager.Current.HardwareProtocol = "WLED (DRGB)", SettingsManager.Current.WledPort, SettingsManager.Current.TargetPort)
-            Broadcaster = New Broadcaster(actIP, actPort, SettingsManager.Current.HardwareProtocol)
-            ApplyConfigToBroadcaster()
+            Broadcaster = New Broadcaster(GetActivePreset())
             UpdateGrid()
             _activeBounds = Rectangle.Empty
 
-            ' ULTIMATE FAIL-SAFE: If the thread died silently, resuscitate it.
             If _workerThread Is Nothing OrElse Not _workerThread.IsAlive Then
                 Logger.Info("Background thread was dead. Restarting engine...")
                 Start()
@@ -61,16 +83,8 @@ Public Class AmbientEngine
         Logger.Info("Settings reloaded and applied to engine.")
     End Sub
 
-    Private Sub ApplyConfigToBroadcaster()
-        Broadcaster.Config.TopCount = SettingsManager.Current.TopLeds
-        Broadcaster.Config.BottomCount = SettingsManager.Current.BottomLeds
-        Broadcaster.Config.LeftCount = SettingsManager.Current.LeftLeds
-        Broadcaster.Config.RightCount = SettingsManager.Current.RightLeds
-        Broadcaster.Config.GridCols = SettingsManager.Current.GridCols
-        Broadcaster.Config.GridRows = SettingsManager.Current.GridRows
-    End Sub
-
     Public Sub UpdateGrid()
+        ' Dynamically builds the exact 1D or 2D array size needed based on layout
         CurrentZones = New Color(GridCols - 1, GridRows - 1) {}
         For y As Integer = 0 To GridRows - 1
             For x As Integer = 0 To GridCols - 1
@@ -89,6 +103,7 @@ Public Class AmbientEngine
     Public Sub [Stop]()
         _running = False
     End Sub
+
     Public Sub Suspend()
         If SettingsManager.Current.FollowPowerState Then _isSuspended = True
     End Sub
@@ -104,7 +119,6 @@ Public Class AmbientEngine
         While _running
             Try
                 frameCounter += 1
-                ' Log a heartbeat every 30 frames (~1 second) so we know if the loop is dead or just returning black
                 If frameCounter >= 30 Then
                     Logger.Info("Heartbeat: Engine loop is running fine.")
                     frameCounter = 0
@@ -122,32 +136,27 @@ Public Class AmbientEngine
                             Broadcaster.SendSolidColor(MimicOverrideColor, False)
                         End If
                     End SyncLock
-                    Thread.Sleep(33) ' Keep sending the hardware heartbeat at ~30fps
-                    Continue While ' Skip screen capture completely
+                    Thread.Sleep(33)
+                    Continue While ' Skip screen capture
                 End If
 
                 ' --- SUSPEND / DIM STATE BYPASS ---
                 If _isSuspended Then
                     If SettingsManager.Current.DimOnPowerState Then
-                        ' Send a heartbeat dim packet twice a second to keep the hardware watchdog alive
                         SyncLock _engineLock
                             If SettingsManager.Current.ControlHardware Then
-                                Broadcaster.SendSolidColor(Color.FromArgb(15, 12, 10), False)
+                                Broadcaster.SendSolidColor(Color.FromArgb(15, 12, 10), True)
                             End If
                         End SyncLock
                         Thread.Sleep(500)
                     Else
-                        ' If Dim is disabled, just sleep. The hardware's 2-second watchdog will safely fade it to black.
                         Thread.Sleep(1000)
                     End If
-                    Continue While ' Skip screen capture completely
+                    Continue While
                 End If
-                ' ----------------------------------
 
                 SyncLock _engineLock
                     CaptureScreen()
-
-                    ' Only broadcast to the network if hardware control is enabled
                     If SettingsManager.Current.ControlHardware Then
                         Broadcaster.SendData(CurrentZones)
                     End If
@@ -156,7 +165,6 @@ Public Class AmbientEngine
             Catch ex As Exception
                 Logger.Error("CRITICAL LOOP FAILURE", ex)
             Finally
-                ' Ensure we never burn out the CPU
                 Dim sleepTime As Integer = Math.Max(10, SettingsManager.Current.UpdateIntervalMs)
                 Thread.Sleep(sleepTime)
             End Try
@@ -164,37 +172,106 @@ Public Class AmbientEngine
         Logger.Info("Ambient Engine Thread Stopped.")
     End Sub
 
+    ' --- PROFILE EVALUATOR ---
+    Private Function GetActiveProfile() As PixelProfile
+        If SettingsManager.Current.Profiles Is Nothing OrElse SettingsManager.Current.Profiles.Count = 0 Then Return Nothing
+
+        Dim nowT As TimeSpan = DateTime.Now.TimeOfDay
+
+        For Each p As PixelProfile In SettingsManager.Current.Profiles
+            If Not p.IsEnabled Then Continue For
+
+            Dim conditionsMet As Boolean = True
+
+            If p.EnableTimeRule Then
+                Dim startT As TimeSpan
+                Dim endT As TimeSpan
+
+                If TimeSpan.TryParse(p.StartTime, startT) AndAlso TimeSpan.TryParse(p.EndTime, endT) Then
+                    Dim isNightTime As Boolean = False
+                    If startT < endT Then
+                        isNightTime = (nowT >= startT AndAlso nowT <= endT)
+                    Else ' Spans across midnight
+                        isNightTime = (nowT >= startT OrElse nowT <= endT)
+                    End If
+
+                    If Not isNightTime Then conditionsMet = False
+                Else
+                    conditionsMet = False
+                End If
+            End If
+
+            If conditionsMet Then Return p
+        Next
+
+        Return Nothing
+    End Function
+
+    Private Sub CheckAndApplyProfileSwitches()
+        Dim activeProf As PixelProfile = GetActiveProfile()
+        Dim targetProfileName As String = If(activeProf IsNot Nothing, activeProf.ProfileName, "BASE")
+
+        If targetProfileName = _currentProfileName Then Return
+
+        Logger.Info($"Profile Switch Detected: Switching from '{_currentProfileName}' to '{targetProfileName}'")
+        _currentProfileName = targetProfileName
+
+        ' 1. Apply Brightness
+        _currentBrightness = If(activeProf IsNot Nothing AndAlso activeProf.OverrideMaxBrightness <> -1,
+                                activeProf.OverrideMaxBrightness,
+                                SettingsManager.Current.MaxBrightness)
+
+        ' 2. Apply Hardware Preset Switch
+        Dim targetPreset As HardwarePreset = GetActivePreset() ' Start with base UI preset
+
+        If activeProf IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(activeProf.OverridePresetName) Then
+            Dim overrideP = SettingsManager.Current.HardwarePresets.FirstOrDefault(Function(p) p.PresetName = activeProf.OverridePresetName)
+            If overrideP IsNot Nothing Then targetPreset = overrideP
+        End If
+
+        ' If the preset IP, Protocol, or Grid Size is different, reboot the Broadcaster.
+        Dim requiresSwap As Boolean = False
+        If Broadcaster IsNot Nothing Then
+            If Broadcaster.ActivePreset.PresetName <> targetPreset.PresetName OrElse Broadcaster.EndpointIP <> targetPreset.IP OrElse Broadcaster.EndpointPort <> targetPreset.Port Then
+                requiresSwap = True
+            End If
+        End If
+
+        If requiresSwap Then
+            Logger.Info($"Rebooting Broadcaster for Hardware Preset Switch: {targetPreset.PresetName} ({targetPreset.IP}:{targetPreset.Port})")
+            Broadcaster.ReleaseHardware()
+            Broadcaster = New Broadcaster(targetPreset)
+            UpdateGrid() ' Rebuild memory grid in case the new preset has different LED zone counts
+        End If
+    End Sub
+
     Private Sub CaptureScreen()
-        ' --- NEW: Hardware Alignment Test Mode Bypass ---
         If SettingsManager.Current.TestMode Then
-            ' Paint the perimeter with the test colors
             For x As Integer = 0 To GridCols - 1
-                CurrentZones(x, 0) = Color.Red            ' Top
-                CurrentZones(x, GridRows - 1) = Color.Green ' Bottom
+                CurrentZones(x, 0) = Color.Red
+                CurrentZones(x, GridRows - 1) = Color.Green
             Next
             For y As Integer = 0 To GridRows - 1
-                CurrentZones(0, y) = Color.Blue           ' Left
-                CurrentZones(GridCols - 1, y) = Color.Magenta ' Right (Purple)
+                CurrentZones(0, y) = Color.Blue
+                CurrentZones(GridCols - 1, y) = Color.Magenta
             Next
-            Return ' Exit immediately. Do not capture the screen or apply smoothing.
+            Return
         End If
+
         Dim mIndex As Integer = SettingsManager.Current.TargetMonitorIndex
         If mIndex >= Screen.AllScreens.Length OrElse mIndex < 0 Then mIndex = 0
         Dim rawBounds = Screen.AllScreens(mIndex).Bounds
 
-        ' --- NEW: Apply Edge Crop (Zoom) ---
         Dim cropPct As Double = SettingsManager.Current.ScreenCropPercent / 100.0
         Dim cropX As Integer = CInt(rawBounds.Width * cropPct)
         Dim cropY As Integer = CInt(rawBounds.Height * cropPct)
 
-        ' Create the new inner rectangle
         Dim monitorBounds As New Rectangle(
             rawBounds.X + cropX,
             rawBounds.Y + cropY,
             rawBounds.Width - (cropX * 2),
             rawBounds.Height - (cropY * 2)
         )
-        ' -----------------------------------
 
         Try
             Using bmp As New Bitmap(monitorBounds.Width, monitorBounds.Height)
@@ -218,23 +295,48 @@ Public Class AmbientEngine
                     _activeBounds = New Rectangle(0, 0, bmp.Width, bmp.Height)
                 End If
 
-                Dim zW As Integer = _activeBounds.Width \ GridCols
-                Dim zH As Integer = _activeBounds.Height \ GridRows
                 Dim smoothFactor As Double = SettingsManager.Current.SmoothingSpeed / 100.0
 
-                For y As Integer = 0 To GridRows - 1
-                    For x As Integer = 0 To GridCols - 1
+                If LayoutMode = "Horizontal Center (Lightbar)" Then
+                    Dim zW As Integer = _activeBounds.Width \ LinearZones
+                    Dim zH As Integer = CInt(_activeBounds.Height * CaptureThickness)
+                    Dim startY As Integer = _activeBounds.Y + (_activeBounds.Height \ 2) - (zH \ 2)
+
+                    For x As Integer = 0 To LinearZones - 1
                         Dim startX As Integer = _activeBounds.X + (x * zW)
-                        Dim startY As Integer = _activeBounds.Y + (y * zH)
-
                         Dim targetColor = CalculateAverage(data, startX, startY, zW, zH)
-
-                        ' NEW: Apply brightness and anti-washout saturation BEFORE smoothing
                         targetColor = ApplyColorCorrection(targetColor)
-
-                        CurrentZones(x, y) = LerpColor(CurrentZones(x, y), targetColor, smoothFactor)
+                        CurrentZones(x, 0) = LerpColor(CurrentZones(x, 0), targetColor, smoothFactor)
                     Next
-                Next
+
+                ElseIf LayoutMode = "Vertical Center (Towers)" Then
+                    Dim zH As Integer = _activeBounds.Height \ LinearZones
+                    Dim zW As Integer = CInt(_activeBounds.Width * CaptureThickness)
+                    Dim startX As Integer = _activeBounds.X + (_activeBounds.Width \ 2) - (zW \ 2)
+
+                    For y As Integer = 0 To LinearZones - 1
+                        Dim startY As Integer = _activeBounds.Y + (y * zH)
+                        Dim targetColor = CalculateAverage(data, startX, startY, zW, zH)
+                        targetColor = ApplyColorCorrection(targetColor)
+                        CurrentZones(0, y) = LerpColor(CurrentZones(0, y), targetColor, smoothFactor)
+                    Next
+
+                Else ' Standard Perimeter
+                    Dim zW As Integer = _activeBounds.Width \ GridCols
+                    Dim zH As Integer = _activeBounds.Height \ GridRows
+
+                    For y As Integer = 0 To GridRows - 1
+                        For x As Integer = 0 To GridCols - 1
+                            Dim startX As Integer = _activeBounds.X + (x * zW)
+                            Dim startY As Integer = _activeBounds.Y + (y * zH)
+
+                            Dim targetColor = CalculateAverage(data, startX, startY, zW, zH)
+                            targetColor = ApplyColorCorrection(targetColor)
+
+                            CurrentZones(x, y) = LerpColor(CurrentZones(x, y), targetColor, smoothFactor)
+                        Next
+                    Next
+                End If
                 bmp.UnlockBits(data)
             End Using
         Catch ex As Exception
@@ -243,11 +345,9 @@ Public Class AmbientEngine
     End Sub
 
     ' --- PREMIUM FEATURES MATH ---
-
     Private Function LerpColor(current As Color, target As Color, t As Double) As Color
         If t >= 1.0 Then Return target
 
-        ' FIX: Convert to Integer first so negative numbers don't overflow the Byte limit
         Dim diffR As Integer = CInt(target.R) - CInt(current.R)
         Dim diffG As Integer = CInt(target.G) - CInt(current.G)
         Dim diffB As Integer = CInt(target.B) - CInt(current.B)
@@ -270,11 +370,9 @@ Public Class AmbientEngine
     Private Sub RecalculateBounds(data As BitmapData, w As Integer, h As Integer)
         Dim topOffset As Integer = 0
         Dim leftOffset As Integer = 0
-
         Dim stride As Integer = data.Stride
         Dim scan0 As IntPtr = data.Scan0
-        Dim maxOffset As Integer = (Math.Abs(stride) * h) - 4 ' Hard memory limit
-
+        Dim maxOffset As Integer = (Math.Abs(stride) * h) - 4
         Dim midX As Integer = w \ 2
         Dim midY As Integer = h \ 2
 
@@ -298,14 +396,10 @@ Public Class AmbientEngine
 
     Private Function IsPixelBright(scan0 As IntPtr, stride As Integer, maxOffset As Integer, x As Integer, y As Integer) As Boolean
         Dim offset As Integer = (y * stride) + (x * 4)
-
         If offset < 0 OrElse offset > maxOffset Then Return False
-
         Dim b As Byte = Marshal.ReadByte(scan0, offset)
         Dim g As Byte = Marshal.ReadByte(scan0, offset + 1)
         Dim r As Byte = Marshal.ReadByte(scan0, offset + 2)
-
-        ' Use the dynamic threshold from settings
         Return (CInt(r) + CInt(g) + CInt(b)) > SettingsManager.Current.BlackBarThreshold
     End Function
 
@@ -314,20 +408,17 @@ Public Class AmbientEngine
         Dim count As Integer = 0
         Dim stride As Integer = data.Stride
         Dim scan0 As IntPtr = data.Scan0
-        Dim maxOffset As Integer = (Math.Abs(stride) * data.Height) - 4 ' Hard memory limit
+        Dim maxOffset As Integer = (Math.Abs(stride) * data.Height) - 4
 
         For y As Integer = 0 To h - 1 Step 8
             For x As Integer = 0 To w - 1 Step 8
                 Dim offset As Integer = ((startY + y) * stride) + ((startX + x) * 4)
-
-                ' MEMORY CLAMP: Prevent Access Violation
                 If offset < 0 OrElse offset > maxOffset Then Continue For
 
                 Dim b As Byte = Marshal.ReadByte(scan0, offset)
                 Dim g As Byte = Marshal.ReadByte(scan0, offset + 1)
                 Dim r As Byte = Marshal.ReadByte(scan0, offset + 2)
 
-                ' FIX: Ensure both sides of multiplication are cast to Double to prevent 255*255 Byte overflow
                 totalB += (CDbl(b) * CDbl(b))
                 totalG += (CDbl(g) * CDbl(g))
                 totalR += (CDbl(r) * CDbl(r))
@@ -343,124 +434,27 @@ Public Class AmbientEngine
         If avgR < 20 AndAlso avgG < 20 AndAlso avgB < 20 Then Return Color.Black
         Return Color.FromArgb(255, avgR, avgG, avgB)
     End Function
-    ' --- PROFILE EVALUATOR ---
-    Private Function GetActiveProfile() As PixelProfile
-        ' If the user hasn't created any profiles, just return Nothing (use base settings)
-        If SettingsManager.Current.Profiles Is Nothing OrElse SettingsManager.Current.Profiles.Count = 0 Then Return Nothing
 
-        Dim nowT As TimeSpan = DateTime.Now.TimeOfDay
-
-        ' Check each profile in order. The first one that matches its conditions wins.
-        For Each p As PixelProfile In SettingsManager.Current.Profiles
-            If Not p.IsEnabled Then Continue For
-
-            Dim conditionsMet As Boolean = True
-
-            ' Check Time Condition
-            If p.EnableTimeRule Then
-                Dim startT As TimeSpan
-                Dim endT As TimeSpan
-
-                If TimeSpan.TryParse(p.StartTime, startT) AndAlso TimeSpan.TryParse(p.EndTime, endT) Then
-                    Dim isNightTime As Boolean = False
-                    If startT < endT Then
-                        isNightTime = (nowT >= startT AndAlso nowT <= endT)
-                    Else ' Spans across midnight
-                        isNightTime = (nowT >= startT OrElse nowT <= endT)
-                    End If
-
-                    If Not isNightTime Then conditionsMet = False
-                Else
-                    conditionsMet = False ' Failed to parse time, invalidate this rule
-                End If
-            End If
-
-            ' (Future: Add App Detection and Fullscreen checks here, setting conditionsMet = False if they fail)
-
-            ' If this profile survived all active checks, it is the winner!
-            If conditionsMet Then Return p
-        Next
-
-        ' No profiles met their conditions, revert to Base
-        Return Nothing
-    End Function
-    Private Sub CheckAndApplyProfileSwitches()
-        Dim activeProf As PixelProfile = GetActiveProfile()
-        Dim targetProfileName As String = If(activeProf IsNot Nothing, activeProf.ProfileName, "BASE")
-
-        ' If the profile hasn't changed since the last frame, do nothing.
-        If targetProfileName = _currentProfileName Then Return
-
-        Logger.Info($"Profile Switch Detected: Switching from '{_currentProfileName}' to '{targetProfileName}'")
-        _currentProfileName = targetProfileName
-
-        ' 1. Apply Brightness
-        _currentBrightness = If(activeProf IsNot Nothing AndAlso activeProf.OverrideMaxBrightness <> -1,
-                                activeProf.OverrideMaxBrightness,
-                                SettingsManager.Current.MaxBrightness)
-
-        ' 2. Apply Hardware Changes (Only if the profile specifies an override)
-        Dim baseProto As String = SettingsManager.Current.HardwareProtocol
-        Dim baseIP As String = If(baseProto = "WLED (DRGB)", SettingsManager.Current.WledIP, SettingsManager.Current.TargetIP)
-        Dim basePort As Integer = If(baseProto = "WLED (DRGB)", SettingsManager.Current.WledPort, SettingsManager.Current.TargetPort)
-
-        Dim newProto As String = baseProto
-        Dim newIP As String = baseIP
-        Dim newPort As Integer = basePort
-
-        If activeProf IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(activeProf.OverrideHardwareProtocol) Then
-            newProto = activeProf.OverrideHardwareProtocol
-            newIP = If(Not String.IsNullOrWhiteSpace(activeProf.OverrideTargetIP), activeProf.OverrideTargetIP, baseIP)
-            newPort = If(activeProf.OverrideTargetPort > 0, activeProf.OverrideTargetPort, basePort)
-        End If
-
-        ' If the hardware target is different than what the Broadcaster is currently using, we must reboot it.
-        Dim requiresHardwareSwap As Boolean = False
-        If Broadcaster IsNot Nothing Then
-            ' Check if we switched WLED vs Native, or changed IP/Port
-            Dim currentIsWled As Boolean = (baseProto = "WLED (DRGB)")
-            Dim newIsWled As Boolean = (newProto = "WLED (DRGB)")
-
-            If currentIsWled <> newIsWled OrElse Broadcaster.EndpointIP <> newIP OrElse Broadcaster.EndpointPort <> newPort Then
-                requiresHardwareSwap = True
-            End If
-        End If
-
-        If requiresHardwareSwap Then
-            Logger.Info($"Rebooting Broadcaster for Profile Hardware Switch: {newIP}:{newPort} ({newProto})")
-            Broadcaster.ReleaseHardware() ' Release the old one gracefully
-
-            Broadcaster = New Broadcaster(newIP, newPort, newProto)
-            ApplyConfigToBroadcaster()
-        End If
-    End Sub
     Private Function ApplyColorCorrection(c As Color) As Color
-        ' 1. Apply Dynamic Profile Brightness
         Dim bri As Single = _currentBrightness / 100.0F
         Dim r As Single = c.R * bri
         Dim g As Single = c.G * bri
         Dim b As Single = c.B * bri
 
-        ' 2. Apply Luma-Preserving Saturation Boost
         Dim sat As Single = SettingsManager.Current.SaturationBoost / 100.0F
         If sat <> 1.0F Then
-            ' Calculate relative luminance (human eye perception)
             Dim luma As Single = 0.299F * r + 0.587F * g + 0.114F * b
-
-            ' Push colors away from the grayscale center
             r = luma + (r - luma) * sat
             g = luma + (g - luma) * sat
             b = luma + (b - luma) * sat
         End If
 
-        ' 3. Clamp values to prevent byte overflow
         r = Math.Max(0, Math.Min(255, r))
         g = Math.Max(0, Math.Min(255, g))
         b = Math.Max(0, Math.Min(255, b))
 
         Return Color.FromArgb(255, CInt(r), CInt(g), CInt(b))
     End Function
-
 
     Public Sub ReleaseAndStop()
         _running = False

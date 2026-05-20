@@ -1,12 +1,13 @@
-﻿' Broadcaster.vb
-Imports System.Net
+﻿Imports System.Net
 Imports System.Net.Sockets
 Imports System.Drawing
 
 Public Class Broadcaster
     Private _client As UdpClient
     Private _endpoint As IPEndPoint
-    Public Property Config As New LedConfiguration()
+
+    ' The Broadcaster now natively holds the entire physical layout of the target hardware
+    Public Property ActivePreset As HardwarePreset
 
     Public ReadOnly Property EndpointIP As String
         Get
@@ -20,12 +21,19 @@ Public Class Broadcaster
         End Get
     End Property
 
-    Private _activeProtocol As String
-
-    Public Sub New(ip As String, port As Integer, protocol As String)
+    Public Sub New(preset As HardwarePreset)
+        ActivePreset = preset
         _client = New UdpClient() With {.EnableBroadcast = True}
-        _endpoint = New IPEndPoint(IPAddress.Parse(ip), port)
-        _activeProtocol = protocol
+
+        ' Failsafe against empty IPs crashing the UdpClient
+        Dim safeIp As String = If(String.IsNullOrWhiteSpace(preset.IP), "255.255.255.255", preset.IP)
+        Dim safePort As Integer = If(preset.Port <= 0, 45045, preset.Port)
+
+        Try
+            _endpoint = New IPEndPoint(IPAddress.Parse(safeIp), safePort)
+        Catch ex As Exception
+            _endpoint = New IPEndPoint(IPAddress.Parse("255.255.255.255"), safePort)
+        End Try
     End Sub
 
     Public Sub SendData(zones(,) As Color)
@@ -34,14 +42,18 @@ Public Class Broadcaster
         Dim gridW As Integer = zones.GetLength(0)
         Dim gridH As Integer = zones.GetLength(1)
 
-        ' Calculate total physical LEDs for the linear animations
-        Dim totalLeds As Integer = SettingsManager.Current.BlankStart + Config.TopCount + SettingsManager.Current.BlankAfterTop + Config.RightCount + SettingsManager.Current.BlankAfterRight + Config.BottomCount + SettingsManager.Current.BlankAfterBottom + Config.LeftCount + SettingsManager.Current.BlankAfterLeft
+        ' Calculate total physical LEDs from the active preset
+        Dim totalLeds As Integer
+        If ActivePreset.LayoutMode = "Standard Perimeter" OrElse String.IsNullOrEmpty(ActivePreset.LayoutMode) Then
+            totalLeds = ActivePreset.BlankStart + ActivePreset.TopLeds + ActivePreset.BlankAfterTop + ActivePreset.RightLeds + ActivePreset.BlankAfterRight + ActivePreset.BottomLeds + ActivePreset.BlankAfterBottom + ActivePreset.LeftLeds + ActivePreset.BlankAfterLeft
+        Else
+            totalLeds = ActivePreset.BlankStart + ActivePreset.TopLeds ' TopLeds is repurposed as the total linear count
+        End If
 
         ' --- LINEAR ANIMATIONS (Bypasses Layout Math) ---
         If SettingsManager.Current.DiagSweep OrElse SettingsManager.Current.DiagBullet Then
             For i As Integer = 0 To totalLeds - 1 : leds.Add(Color.Black) : Next
             If SettingsManager.Current.DiagSweep Then
-                ' Sweep: RRRGGGBBB moving linearly (Slower)
                 Dim head As Integer = CInt((_animTick * 0.7) Mod (totalLeds + 10))
                 For i As Integer = 0 To 8
                     Dim idx As Integer = head - i
@@ -56,25 +68,54 @@ Public Class Broadcaster
                     End If
                 Next
             ElseIf SettingsManager.Current.DiagBullet Then
-                ' Bullet: Rapid white comet (Faster, short tail)
                 Dim head As Integer = CInt((_animTick * 8) Mod (totalLeds + 5))
-            For i As Integer = 0 To 3 ' Only 4 LEDs total
-                Dim idx As Integer = head - i
-                If idx >= 0 AndAlso idx < totalLeds Then
-                    Dim intensity As Integer = Math.Max(0, 255 - (i * 65)) ' Drops fast: 255, 190, 125, 60
-                    leds(idx) = Color.FromArgb(intensity, intensity, intensity)
+                For i As Integer = 0 To 3
+                    Dim idx As Integer = head - i
+                    If idx >= 0 AndAlso idx < totalLeds Then
+                        Dim intensity As Integer = Math.Max(0, 255 - (i * 65))
+                        leds(idx) = Color.FromArgb(intensity, intensity, intensity)
+                    End If
+                Next
+            End If
+
+            GoTo BuildPacket
+        End If
+
+        ' --- LINEAR ROUTING SEQUENCE (Lightbars & Towers) ---
+        If ActivePreset.LayoutMode = "Horizontal Center (Lightbar)" OrElse ActivePreset.LayoutMode = "Vertical Center (Towers)" Then
+            Dim reverse As Boolean = (ActivePreset.Direction = "Right-to-Left" OrElse ActivePreset.Direction = "Bottom-to-Top")
+            Dim linearCount As Integer = Math.Max(1, ActivePreset.LinearZones)
+            Dim physicalCount As Integer = Math.Max(1, ActivePreset.TopLeds)
+
+            AddBlankLeds(leds, ActivePreset.BlankStart)
+
+            For i As Integer = 0 To physicalCount - 1
+                ' Intelligently map physical LEDs to detection slices
+                Dim zoneIdx As Integer = CInt(Math.Floor((i / physicalCount) * linearCount))
+                If zoneIdx >= linearCount Then zoneIdx = linearCount - 1
+                If reverse Then zoneIdx = (linearCount - 1) - zoneIdx
+
+                If SettingsManager.Current.TestMode Then
+                    leds.Add(If(i < physicalCount / 2, Color.Red, Color.Blue))
+                ElseIf SettingsManager.Current.DiagGaps Then
+                    leds.Add(Color.Black)
+                Else
+                    If ActivePreset.LayoutMode = "Vertical Center (Towers)" Then
+                        leds.Add(zones(0, zoneIdx))
+                    Else
+                        leds.Add(zones(zoneIdx, 0))
+                    End If
                 End If
             Next
+
+            GoTo BuildPacket
         End If
 
-        GoTo BuildPacket
-        End If
-
-        ' --- DYNAMIC ROUTING SEQUENCE ---
-        Dim cw As Boolean = (SettingsManager.Current.Direction = "Clockwise")
+        ' --- STANDARD PERIMETER ROUTING SEQUENCE ---
+        Dim cw As Boolean = (ActivePreset.Direction = "Clockwise")
         Dim startIdx As Integer = 0
 
-        Select Case SettingsManager.Current.StartEdge
+        Select Case ActivePreset.StartEdge
             Case "Right" : startIdx = 1
             Case "Bottom" : startIdx = 2
             Case "Left" : startIdx = 3
@@ -90,67 +131,66 @@ Public Class Broadcaster
             End If
         Next
 
-        ' Breathing Math for Segments (Generates a sine wave pulse between 0 and 255)
         Dim breathVal As Integer = CInt((Math.Sin(_animTick * 0.15) * 127) + 128)
         Dim purpleBreath As Color = Color.FromArgb(breathVal, 0, breathVal)
 
-        AddBlankLeds(leds, SettingsManager.Current.BlankStart)
+        AddBlankLeds(leds, ActivePreset.BlankStart)
 
         For Each sideIdx In order
             Select Case sideIdx
                 Case 0 ' Top
                     If SettingsManager.Current.TestMode Then
-                        For i As Integer = 1 To Config.TopCount : leds.Add(Color.Red) : Next
+                        For i As Integer = 1 To ActivePreset.TopLeds : leds.Add(Color.Red) : Next
                     ElseIf SettingsManager.Current.DiagSegments Then
-                        For i As Integer = 1 To Config.TopCount : leds.Add(If(i = 1 Or i = Config.TopCount, purpleBreath, Color.Black)) : Next
+                        For i As Integer = 1 To ActivePreset.TopLeds : leds.Add(If(i = 1 Or i = ActivePreset.TopLeds, purpleBreath, Color.Black)) : Next
                     ElseIf SettingsManager.Current.DiagGaps Then
-                        For i As Integer = 1 To Config.TopCount : leds.Add(Color.Black) : Next
+                        For i As Integer = 1 To ActivePreset.TopLeds : leds.Add(Color.Black) : Next
                     Else
-                        MapSide(leds, zones, Config.TopCount, True, 0, gridW, Not cw)
+                        MapSide(leds, zones, ActivePreset.TopLeds, True, 0, gridW, Not cw)
                     End If
-                    AddBlankLeds(leds, SettingsManager.Current.BlankAfterTop)
+                    AddBlankLeds(leds, ActivePreset.BlankAfterTop)
 
                 Case 1 ' Right
                     If SettingsManager.Current.TestMode Then
-                        For i As Integer = 1 To Config.RightCount : leds.Add(Color.Magenta) : Next
+                        For i As Integer = 1 To ActivePreset.RightLeds : leds.Add(Color.Magenta) : Next
                     ElseIf SettingsManager.Current.DiagSegments Then
-                        For i As Integer = 1 To Config.RightCount : leds.Add(If(i = 1 Or i = Config.RightCount, purpleBreath, Color.Black)) : Next
+                        For i As Integer = 1 To ActivePreset.RightLeds : leds.Add(If(i = 1 Or i = ActivePreset.RightLeds, purpleBreath, Color.Black)) : Next
                     ElseIf SettingsManager.Current.DiagGaps Then
-                        For i As Integer = 1 To Config.RightCount : leds.Add(Color.Black) : Next
+                        For i As Integer = 1 To ActivePreset.RightLeds : leds.Add(Color.Black) : Next
                     Else
-                        MapSide(leds, zones, Config.RightCount, False, gridW - 1, gridH, Not cw)
+                        MapSide(leds, zones, ActivePreset.RightLeds, False, gridW - 1, gridH, Not cw)
                     End If
-                    AddBlankLeds(leds, SettingsManager.Current.BlankAfterRight)
+                    AddBlankLeds(leds, ActivePreset.BlankAfterRight)
 
                 Case 2 ' Bottom
                     If SettingsManager.Current.TestMode Then
-                        For i As Integer = 1 To Config.BottomCount : leds.Add(Color.Green) : Next
+                        For i As Integer = 1 To ActivePreset.BottomLeds : leds.Add(Color.Green) : Next
                     ElseIf SettingsManager.Current.DiagSegments Then
-                        For i As Integer = 1 To Config.BottomCount : leds.Add(If(i = 1 Or i = Config.BottomCount, purpleBreath, Color.Black)) : Next
+                        For i As Integer = 1 To ActivePreset.BottomLeds : leds.Add(If(i = 1 Or i = ActivePreset.BottomLeds, purpleBreath, Color.Black)) : Next
                     ElseIf SettingsManager.Current.DiagGaps Then
-                        For i As Integer = 1 To Config.BottomCount : leds.Add(Color.Black) : Next
+                        For i As Integer = 1 To ActivePreset.BottomLeds : leds.Add(Color.Black) : Next
                     Else
-                        MapSide(leds, zones, Config.BottomCount, True, gridH - 1, gridW, cw)
+                        MapSide(leds, zones, ActivePreset.BottomLeds, True, gridH - 1, gridW, cw)
                     End If
-                    AddBlankLeds(leds, SettingsManager.Current.BlankAfterBottom)
+                    AddBlankLeds(leds, ActivePreset.BlankAfterBottom)
 
                 Case 3 ' Left
                     If SettingsManager.Current.TestMode Then
-                        For i As Integer = 1 To Config.LeftCount : leds.Add(Color.Blue) : Next
+                        For i As Integer = 1 To ActivePreset.LeftLeds : leds.Add(Color.Blue) : Next
                     ElseIf SettingsManager.Current.DiagSegments Then
-                        For i As Integer = 1 To Config.LeftCount : leds.Add(If(i = 1 Or i = Config.LeftCount, purpleBreath, Color.Black)) : Next
+                        For i As Integer = 1 To ActivePreset.LeftLeds : leds.Add(If(i = 1 Or i = ActivePreset.LeftLeds, purpleBreath, Color.Black)) : Next
                     ElseIf SettingsManager.Current.DiagGaps Then
-                        For i As Integer = 1 To Config.LeftCount : leds.Add(Color.Black) : Next
+                        For i As Integer = 1 To ActivePreset.LeftLeds : leds.Add(Color.Black) : Next
                     Else
-                        MapSide(leds, zones, Config.LeftCount, False, 0, gridH, cw)
+                        MapSide(leds, zones, ActivePreset.LeftLeds, False, 0, gridH, cw)
                     End If
-                    AddBlankLeds(leds, SettingsManager.Current.BlankAfterLeft)
+                    AddBlankLeds(leds, ActivePreset.BlankAfterLeft)
             End Select
         Next
 
 BuildPacket:
         ' --- PACKET CONSTRUCTION ---
-        Dim isWled As Boolean = (_activeProtocol = "WLED (DRGB)")
+        Dim isWled As Boolean = (ActivePreset.Protocol = "WLED (DRGB)")
         Dim payload() As Byte
         Dim offset As Integer
 
@@ -169,7 +209,7 @@ BuildPacket:
         For i As Integer = 0 To leds.Count - 1
             Dim c As Color = leds(i)
             Dim idx As Integer = offset + (i * 3)
-            Dim activeSeq As String = If(isWled, "RGB", SettingsManager.Current.ColorSequence)
+            Dim activeSeq As String = If(isWled, "RGB", ActivePreset.ColorSequence)
 
             Select Case activeSeq
                 Case "GRB" : payload(idx) = c.G : payload(idx + 1) = c.R : payload(idx + 2) = c.B
@@ -187,6 +227,7 @@ BuildPacket:
             _client.Send(payload, payload.Length, _endpoint)
         Catch : End Try
     End Sub
+
     Private Sub MapSide(list As List(Of Color), zones(,) As Color, physicalCount As Integer, isHorizontal As Boolean, fixedIndex As Integer, gridSize As Integer, Optional reverse As Boolean = False)
         For i As Integer = 0 To physicalCount - 1
             Dim idx As Integer = CInt(Math.Floor((i / physicalCount) * gridSize))
@@ -201,29 +242,24 @@ BuildPacket:
         Next
     End Sub
 
-    Private _animTick As Integer = 0 ' Master animation frame counter
+    Private _animTick As Integer = 0
 
     Private Sub AddBlankLeds(leds As List(Of Color), count As Integer)
-        ' Inject Red if the Gap Diagnostic is active, otherwise keep them Black
         Dim c As Color = If(SettingsManager.Current.DiagGaps, Color.Red, Color.Black)
         For i As Integer = 1 To count
             leds.Add(c)
         Next
     End Sub
 
-
-
     Public Sub ReleaseHardware()
         Try
-            If _activeProtocol = "WLED (DRGB)" Then
-                ' Sending a 1-byte packet containing '0' tells WLED to immediately exit real-time mode
+            If ActivePreset.Protocol = "WLED (DRGB)" Then
                 Dim releasePacket() As Byte = {0}
                 _client.Send(releasePacket, releasePacket.Length, _endpoint)
             Else
-                ' For PixelGlow Native, send a pure black packet to turn off the LEDs
-                Dim blackZones(Config.GridCols - 1, Config.GridRows - 1) As Color
-                For x = 0 To Config.GridCols - 1
-                    For y = 0 To Config.GridRows - 1
+                Dim blackZones(ActivePreset.GridCols - 1, ActivePreset.GridRows - 1) As Color
+                For x = 0 To ActivePreset.GridCols - 1
+                    For y = 0 To ActivePreset.GridRows - 1
                         blackZones(x, y) = Color.Black
                     Next
                 Next
@@ -233,16 +269,15 @@ BuildPacket:
     End Sub
 
     Public Sub SendSolidColor(targetColor As Color, holdState As Boolean)
-        Dim totalLeds As Integer = Config.TopCount + Config.RightCount + Config.BottomCount + Config.LeftCount + SettingsManager.Current.BlankStart + SettingsManager.Current.BlankAfterTop + SettingsManager.Current.BlankAfterRight + SettingsManager.Current.BlankAfterBottom + SettingsManager.Current.BlankAfterLeft
+        Dim totalLeds As Integer = ActivePreset.TopLeds + ActivePreset.RightLeds + ActivePreset.BottomLeds + ActivePreset.LeftLeds + ActivePreset.BlankStart + ActivePreset.BlankAfterTop + ActivePreset.BlankAfterRight + ActivePreset.BlankAfterBottom + ActivePreset.BlankAfterLeft
 
-        Dim isWled As Boolean = (_activeProtocol = "WLED (DRGB)")
+        Dim isWled As Boolean = (ActivePreset.Protocol = "WLED (DRGB)")
         Dim payload() As Byte
         Dim offset As Integer
 
         If isWled Then
             ReDim payload((totalLeds * 3) + 1)
             payload(0) = 2 ' DRGB Mode
-            ' If holding state (dim), set WLED timeout to 255 (infinite). Otherwise, standard 2 seconds.
             payload(1) = CByte(If(holdState, 255, 2))
             offset = 2
         Else
@@ -252,7 +287,7 @@ BuildPacket:
             offset = 2
         End If
 
-        Dim activeSeq As String = If(isWled, "RGB", SettingsManager.Current.ColorSequence)
+        Dim activeSeq As String = If(isWled, "RGB", ActivePreset.ColorSequence)
 
         For i As Integer = 0 To totalLeds - 1
             Dim idx As Integer = offset + (i * 3)
@@ -272,5 +307,4 @@ BuildPacket:
             _client.Send(payload, payload.Length, _endpoint)
         Catch : End Try
     End Sub
-
 End Class

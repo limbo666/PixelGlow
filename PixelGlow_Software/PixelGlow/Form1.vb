@@ -217,23 +217,64 @@ Public Class Form1
         Dim zones = _engine?.CurrentZones
         If zones Is Nothing Then Exit Sub
 
-        Dim cols = _engine.GridCols
-        Dim rows = _engine.GridRows
-        Dim cellW As Single = Me.ClientSize.Width / cols
-        Dim cellH As Single = Me.ClientSize.Height / rows
+        Try
+            ' Get real-time array bounds to prevent out-of-bounds crashes during preset switches
+            Dim cols As Integer = zones.GetLength(0)
+            Dim rows As Integer = zones.GetLength(1)
 
-        For y As Integer = 0 To rows - 1
-            For x As Integer = 0 To cols - 1
-                Using br As New SolidBrush(zones(x, y))
-                    e.Graphics.FillRectangle(br, x * cellW, y * cellH, cellW, cellH)
-                End Using
+            Dim layoutMode As String = _engine.LayoutMode
+            Dim thickness As Double = _engine.CaptureThickness
 
-                ' Draw grid lines only if enabled in settings
-                If SettingsManager.Current.ShowDetectionGrid Then
-                    e.Graphics.DrawRectangle(Pens.DimGray, x * cellW, y * cellH, cellW, cellH)
-                End If
-            Next
-        Next
+            Dim winW As Single = Me.ClientSize.Width
+            Dim winH As Single = Me.ClientSize.Height
+
+            If layoutMode = "Horizontal Center (Lightbar)" Then
+                Dim cellW As Single = winW / cols
+                Dim drawH As Single = CSng(winH * thickness)
+                Dim startY As Single = (winH / 2) - (drawH / 2)
+
+                For x As Integer = 0 To cols - 1
+                    Using br As New SolidBrush(zones(x, 0))
+                        e.Graphics.FillRectangle(br, x * cellW, startY, cellW, drawH)
+                    End Using
+                    If SettingsManager.Current.ShowDetectionGrid Then
+                        e.Graphics.DrawRectangle(Pens.DimGray, x * cellW, startY, cellW, drawH)
+                    End If
+                Next
+
+            ElseIf layoutMode = "Vertical Center (Towers)" Then
+                Dim cellH As Single = winH / rows
+                Dim drawW As Single = CSng(winW * thickness)
+                Dim startX As Single = (winW / 2) - (drawW / 2)
+
+                For y As Integer = 0 To rows - 1
+                    Using br As New SolidBrush(zones(0, y))
+                        e.Graphics.FillRectangle(br, startX, y * cellH, drawW, cellH)
+                    End Using
+                    If SettingsManager.Current.ShowDetectionGrid Then
+                        e.Graphics.DrawRectangle(Pens.DimGray, startX, y * cellH, drawW, cellH)
+                    End If
+                Next
+
+            Else ' Standard Perimeter
+                Dim cellW As Single = winW / cols
+                Dim cellH As Single = winH / rows
+
+                For y As Integer = 0 To rows - 1
+                    For x As Integer = 0 To cols - 1
+                        Using br As New SolidBrush(zones(x, y))
+                            e.Graphics.FillRectangle(br, x * cellW, y * cellH, cellW, cellH)
+                        End Using
+                        If SettingsManager.Current.ShowDetectionGrid Then
+                            e.Graphics.DrawRectangle(Pens.DimGray, x * cellW, y * cellH, cellW, cellH)
+                        End If
+                    Next
+                Next
+            End If
+
+        Catch ex As Exception
+            ' Safely swallow Thread/Array collision when swapping presets rapidly
+        End Try
     End Sub
 
     Protected Overrides Sub OnFormClosing(e As FormClosingEventArgs)
