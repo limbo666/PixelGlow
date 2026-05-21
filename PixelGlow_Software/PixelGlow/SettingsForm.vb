@@ -17,7 +17,8 @@ Public Class SettingsForm
     Private _chkBlackBar, _chkTestMode, _chkGrid, _chkLogging, _chkControlHw As CheckBox
     Private _chkDiagSegments, _chkDiagGaps, _chkDiagSweep, _chkDiagBullet As CheckBox
     Private _chkStartInTray, _chkStartWithWindows As CheckBox
-    Private _chkFollowPower, _chkDimOnPower As CheckBox
+    Private _chkFollowPower, _chkDimOnPower, _chkDimBreathing As CheckBox
+    Private _cmbDimColor As ComboBox
     Private _lblStatus As Label
 
     ' Virtual Tab Infrastructure
@@ -307,11 +308,25 @@ Public Class SettingsForm
         _chkStartWithWindows = AddCheckBoxRow("Start with Windows", SettingsManager.Current.StartWithWindows, "Automatically launches PixelGlow when you log into your computer.", tblGen)
         AddSectionHeader("Power Management", tblGen)
         _chkFollowPower = AddCheckBoxRow("Follow OS Power State", SettingsManager.Current.FollowPowerState, "Automatically pauses the ambient lighting when Windows goes to sleep or the screen is locked.", tblGen)
-        _chkDimOnPower = AddCheckBoxRow("Dim Lights on Lock/Sleep", SettingsManager.Current.DimOnPowerState, "Instead of turning off completely, fade the LEDs to a very dim cinematic white glow.", tblGen)
+        _chkDimOnPower = AddCheckBoxRow("Dim Lights on Lock/Sleep", SettingsManager.Current.DimOnPowerState, "Instead of turning off completely, fade the LEDs to a very dim glow.", tblGen)
+
+        _cmbDimColor = AddComboBoxRow("Dimming Color", "Select the color to use during standby.", tblGen)
+        _cmbDimColor.Items.AddRange(New String() {"White", "Red", "Green", "Blue"})
+        _cmbDimColor.SelectedItem = If(String.IsNullOrEmpty(SettingsManager.Current.DimColor), "White", SettingsManager.Current.DimColor)
+
+        _chkDimBreathing = AddCheckBoxRow("Breathing Effect", SettingsManager.Current.DimBreathing, "Slowly pulse the dim color while the system is locked.", tblGen)
+
         AddSectionHeader("Tools", tblGen)
         _chkLogging = AddCheckBoxRow("Enable Logging", SettingsManager.Current.LoggingEnabled, "Writes background diagnostic information to a log file for troubleshooting.", tblGen)
-        _chkDimOnPower.Enabled = _chkFollowPower.Checked
-        AddHandler _chkFollowPower.CheckedChanged, Sub() _chkDimOnPower.Enabled = _chkFollowPower.Checked
+
+        Dim syncPowerUi = Sub()
+                              _chkDimOnPower.Enabled = _chkFollowPower.Checked
+                              _cmbDimColor.Enabled = _chkFollowPower.Checked AndAlso _chkDimOnPower.Checked
+                              _chkDimBreathing.Enabled = _chkFollowPower.Checked AndAlso _chkDimOnPower.Checked
+                          End Sub
+        AddHandler _chkFollowPower.CheckedChanged, Sub() syncPowerUi()
+        AddHandler _chkDimOnPower.CheckedChanged, Sub() syncPowerUi()
+        syncPowerUi()
 
 
         ' === TAB 6: Profiles ===
@@ -608,6 +623,8 @@ Public Class SettingsForm
             .StartWithWindows = _chkStartWithWindows.Checked
             .FollowPowerState = _chkFollowPower.Checked
             .DimOnPowerState = _chkDimOnPower.Checked
+            .DimColor = If(_cmbDimColor.SelectedItem IsNot Nothing, _cmbDimColor.SelectedItem.ToString(), "White")
+            .DimBreathing = _chkDimBreathing.Checked
             .LoggingEnabled = _chkLogging.Checked
         End With
 

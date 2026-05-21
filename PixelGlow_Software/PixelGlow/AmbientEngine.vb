@@ -143,12 +143,34 @@ Public Class AmbientEngine
                 ' --- SUSPEND / DIM STATE BYPASS ---
                 If _isSuspended Then
                     If SettingsManager.Current.DimOnPowerState Then
+                        Dim baseIntensity As Integer = 15
+                        If SettingsManager.Current.DimBreathing Then
+                            ' Use TickCount for microsecond-smooth time progression independent of system clock
+                            Dim timeSec As Double = Environment.TickCount / 1000.0
+                            ' Create a 0.0 to 1.0 normalized wave
+                            Dim wave As Double = (Math.Sin(timeSec * 0.5) + 1.0) / 2.0
+                            ' Square the wave for human-eye Gamma Correction (makes low-light fades look perfectly linear)
+                            wave = wave * wave
+                            ' Expand the range (3 to 55) for high-resolution integer stepping
+                            baseIntensity = CInt((52.0 * wave) + 10.0)
+                        End If
+
+                        Dim dimColor As Color
+                        Select Case SettingsManager.Current.DimColor
+                            Case "Red" : dimColor = Color.FromArgb(baseIntensity, 0, 0)
+                            Case "Green" : dimColor = Color.FromArgb(0, baseIntensity, 0)
+                            Case "Blue" : dimColor = Color.FromArgb(0, 0, baseIntensity)
+                            Case Else : dimColor = Color.FromArgb(baseIntensity, CInt(baseIntensity * 0.85), CInt(baseIntensity * 0.7)) ' Warm Cinematic White
+                        End Select
+
                         SyncLock _engineLock
                             If SettingsManager.Current.ControlHardware Then
-                                Broadcaster.SendSolidColor(Color.FromArgb(15, 12, 10), True)
+                                Broadcaster.SendSolidColor(dimColor, True)
                             End If
                         End SyncLock
-                        Thread.Sleep(500)
+
+                        ' 33ms (30 FPS) refresh for buttery smooth animation, 500ms for static
+                        Thread.Sleep(If(SettingsManager.Current.DimBreathing, 33, 500))
                     Else
                         Thread.Sleep(1000)
                     End If

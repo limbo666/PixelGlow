@@ -11,6 +11,8 @@ Public Class AppSettings
     Public Property StartWithWindows As Boolean = False
     Public Property FollowPowerState As Boolean = True
     Public Property DimOnPowerState As Boolean = False
+    Public Property DimColor As String = "White"
+    Public Property DimBreathing As Boolean = False
 
     Public Property TargetMonitorIndex As Integer = 0
     Public Property ScreenCropPercent As Integer = 0 ' 0 to 25% edge cropping
