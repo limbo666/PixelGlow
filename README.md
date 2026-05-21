@@ -58,7 +58,7 @@ PixelGlow operates on a decoupled architecture:
 
 ## Hardware Setup
 
-You have two options for the hardware receiver: using the custom PixelGlow firmware, or using standard WLED.
+You have two options for the hardware receiver: using the custom PixelGlow firmware, or using standard WLED.  
 Hardware README: https://github.com/limbo666/PixelGlow/blob/main/PixelGlow_Hardware/Hardware_ReadMe.MD
 ### Option A: PixelGlow Native Firmware (Recommended for dedicated setups)
 1.  **Prerequisites:** An ESP32 or ESP8266, a WS2812B LED strip, and a 5V power supply.
